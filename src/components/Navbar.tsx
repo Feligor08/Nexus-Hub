@@ -13,7 +13,6 @@ import {
   LayoutDashboard,
   LogOut,
   ChevronDown,
-  Check,
   Menu,
   X,
   LogIn,
@@ -28,12 +27,11 @@ interface NavbarProps {
 }
 
 export const Navbar: React.FC<NavbarProps> = ({ currentView, onNavigate, onOpenSearch }) => {
-  const { currentUser, isAuthenticated, logout, switchRole, isAdmin, isCreator, openAuthModal } = useAuth();
+  const { currentUser, isAuthenticated, logout, isAdmin, isCreator, openAuthModal } = useAuth();
   const { itemCount, setIsCartOpen } = useCart();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
-  const [isRoleMenuOpen, setIsRoleMenuOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
 
@@ -219,42 +217,6 @@ export const Navbar: React.FC<NavbarProps> = ({ currentView, onNavigate, onOpenS
               </span>
             )}
           </button>
-
-          {/* Role Switcher Pill (Quick RBAC Testing) */}
-          <div className="relative hidden md:block">
-            <button
-              onClick={() => setIsRoleMenuOpen(!isRoleMenuOpen)}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 min-h-[44px] text-2xs font-mono uppercase tracking-wider text-zinc-300 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-colors cursor-pointer"
-              title="Rolle umschalten für Testzwecke"
-            >
-              <span className="text-zinc-400 font-normal">Rolle:</span>
-              <span className="font-bold text-white">{currentUser?.role || 'GUEST'}</span>
-              <ChevronDown className="w-3 h-3 text-zinc-500" />
-            </button>
-
-            {isRoleMenuOpen && (
-              <div className="absolute right-0 mt-1.5 w-48 glass-3 rounded-xl p-1.5 z-50 shadow-2xl border border-white/10">
-                <span className="text-2xs text-zinc-500 px-2 py-1 block">Rolle wechseln (RBAC):</span>
-                {(['USER', 'CREATOR', 'MODERATOR', 'ADMIN', 'GUEST'] as const).map((r) => (
-                  <button
-                    key={r}
-                    onClick={() => {
-                      switchRole(r);
-                      setIsRoleMenuOpen(false);
-                    }}
-                    className={`w-full text-left px-2.5 py-1.5 text-2xs rounded-lg flex items-center justify-between cursor-pointer ${
-                      currentUser?.role === r
-                        ? 'bg-white/15 text-white font-bold'
-                        : 'text-zinc-400 hover:text-white hover:bg-white/5'
-                    }`}
-                  >
-                    <span>{r}</span>
-                    {currentUser?.role === r && <Check className="w-3 h-3 text-white" />}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
 
           {/* User Section: Either Logged In Menu OR Auth Buttons */}
           {isAuthenticated && currentUser ? (

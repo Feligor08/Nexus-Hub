@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { X, LogIn, UserPlus, Eye, EyeOff, ShieldCheck, Sparkles, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { X, LogIn, UserPlus, Eye, EyeOff, Sparkles, AlertCircle, CheckCircle2 } from 'lucide-react';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -51,12 +51,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     } finally {
       setIsSubmitting(false);
     }
-  };
-
-  const handleQuickFill = (presetEmail: string, presetPass: string) => {
-    setEmail(presetEmail);
-    setPassword(presetPass);
-    setError(null);
   };
 
   return (
@@ -232,46 +226,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             )}
           </button>
 
-          {/* Quick-Fill Presets for Test Accounts */}
-          {mode === 'login' && (
-            <div className="pt-3 border-t border-white/10 space-y-2">
-              <div className="flex items-center justify-between text-3xs font-mono uppercase tracking-wider text-zinc-400">
-                <span className="flex items-center gap-1">
-                  <ShieldCheck className="w-3 h-3 text-zinc-400" />
-                  Test-Profile (1-Klick ausfüllen):
-                </span>
-              </div>
-              <div className="grid grid-cols-3 gap-1.5 text-2xs">
-                <button
-                  type="button"
-                  onClick={() => handleQuickFill('fschlueter08@gmail.com', 'password123')}
-                  className="px-2 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-left truncate transition-colors text-zinc-300 hover:text-white cursor-pointer"
-                  title="Admin: Felix Schlüter"
-                >
-                  <span className="font-bold text-white block truncate">Admin</span>
-                  <span className="text-3xs text-zinc-400 font-mono">feligor08</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleQuickFill('alex@example.com', 'password123')}
-                  className="px-2 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-left truncate transition-colors text-zinc-300 hover:text-white cursor-pointer"
-                  title="Creator: Alex Meier"
-                >
-                  <span className="font-bold text-white block truncate">Creator</span>
-                  <span className="text-3xs text-zinc-400 font-mono">alex_code</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleQuickFill('guest@nexuscodeplay.dev', 'password123')}
-                  className="px-2 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-left truncate transition-colors text-zinc-300 hover:text-white cursor-pointer"
-                  title="User: Gast Entwickler"
-                >
-                  <span className="font-bold text-white block truncate">User</span>
-                  <span className="text-3xs text-zinc-400 font-mono">guest_user</span>
-                </button>
-              </div>
-            </div>
-          )}
         </form>
       </div>
     </div>

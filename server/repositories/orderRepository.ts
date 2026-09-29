@@ -1,14 +1,13 @@
 import { withTransaction, executeQuery, getLastDatabaseStatus } from '../config/database';
 import { Order, OrderItem } from '../models/types';
-import { db } from '../db';
 
 export class OrderRepository {
   async create(order: Order): Promise<Order> {
-    const dbStatus = getLastDatabaseStatus();
+    if (!getLastDatabaseStatus().connected) {
+      throw new Error('MariaDB ist nicht erreichbar. Die Bestellung wurde nicht gespeichert.');
+    }
 
-    if (dbStatus.connected) {
-      try {
-        await withTransaction(async (conn) => {
+    await withTransaction(async (conn) => {
           // 1. Insert order
           await conn.execute(
             `INSERT INTO orders (id, user_id, customer_email, total_amount, currency, status, payment_status, download_token, created_at)
@@ -41,58 +40,40 @@ export class OrderRepository {
               ]
             );
           }
-        });
-      } catch (err) {
-        console.warn('MariaDB transaction failed in OrderRepository.create:', err);
-      }
-    }
-
-    db.orders.unshift(order);
+    });
     return order;
   }
 
   async findByUserId(userId: string): Promise<Order[]> {
-    const dbStatus = getLastDatabaseStatus();
-    if (dbStatus.connected) {
-      try {
-        const rows = await executeQuery<any>(
-          `SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC`,
-          [userId]
-        );
-
-        const orders: Order[] = await Promise.all(
-          rows.map(async (r) => {
-            const itemRows = await executeQuery<any>(
-              `SELECT * FROM order_items WHERE order_id = ?`,
-              [r.id]
-            );
-            return {
-              id: r.id,
-              userId: r.user_id,
-              customerEmail: r.customer_email,
-              totalAmount: Number(r.total_amount),
-              currency: r.currency,
-              status: r.status,
-              paymentStatus: r.payment_status,
-              downloadToken: r.download_token,
-              createdAt: r.created_at,
-              items: itemRows.map((it) => ({
-                productId: it.product_id,
-                name: it.product_name_snapshot,
-                price: Number(it.unit_price),
-                quantity: it.quantity,
-                fileFormat: it.file_format_snapshot,
-              })),
-            };
-          })
-        );
-        return orders;
-      } catch (err) {
-        console.warn('MariaDB findByUserId failed:', err);
-      }
+    if (!getLastDatabaseStatus().connected) {
+      throw new Error('MariaDB ist nicht erreichbar. Bestellungen sind derzeit nicht verfügbar.');
     }
+    const rows = await executeQuery<any>(
+      `SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC`,
+      [userId]
+    );
 
-    return db.orders.filter((o) => o.userId === userId);
+    return Promise.all(rows.map(async (row) => {
+      const itemRows = await executeQuery<any>(`SELECT * FROM order_items WHERE order_id = ?`, [row.id]);
+      return {
+        id: row.id,
+        userId: row.user_id,
+        customerEmail: row.customer_email,
+        totalAmount: Number(row.total_amount),
+        currency: row.currency,
+        status: row.status,
+        paymentStatus: row.payment_status,
+        downloadToken: row.download_token,
+        createdAt: row.created_at,
+        items: itemRows.map((item: any): OrderItem => ({
+          productId: item.product_id,
+          name: item.product_name_snapshot,
+          price: Number(item.unit_price),
+          quantity: item.quantity,
+          fileFormat: item.file_format_snapshot,
+        })),
+      };
+    }));
   }
 }
 

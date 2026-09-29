@@ -1,8 +1,26 @@
-import { executeQuery, getLastDatabaseStatus } from '../config/database';
+import { executeQuery, getLastDatabaseStatus, withTransaction } from '../config/database';
 import { Project, ContentStatus } from '../models/types';
-import { db } from '../db';
 
 export class ProjectRepository {
+  private async validateMediaReferences(
+    connection: import('mysql2/promise').PoolConnection,
+    project: Project,
+    allowForeignOwner: boolean
+  ): Promise<void> {
+    const mediaIds = [...new Set([project.coverMediaId, ...(project.galleryMediaIds || [])].filter((id): id is string => Boolean(id)))];
+    for (const mediaId of mediaIds) {
+      const [rows] = await connection.execute<Array<import('mysql2').RowDataPacket & { owner_id: string; file_category: string }>>(
+        `SELECT owner_id, file_category FROM media_files WHERE id = ? LIMIT 1 FOR UPDATE`,
+        [mediaId]
+      );
+      const media = rows[0];
+      if (!media || (!allowForeignOwner && media.owner_id !== project.authorId)) {
+        throw new Error('Mediendatei nicht gefunden oder nicht im eigenen Besitz.');
+      }
+      if (media.file_category !== 'image') throw new Error('Projektcover und Galerie benötigen Bilddateien.');
+    }
+  }
+
   async findAll(options?: {
     category?: string;
     search?: string;
@@ -15,6 +33,7 @@ export class ProjectRepository {
     limit?: number;
   }): Promise<{ projects: Project[]; total: number }> {
     const dbStatus = getLastDatabaseStatus();
+    if (!dbStatus.connected) throw new Error('MariaDB ist nicht erreichbar. Projekte sind derzeit nicht verfügbar.');
 
     // Default public filtering: only PUBLISHED and PUBLIC unless explicitly requested with authorId or includeDrafts
     const targetStatus = options?.status || (options?.includeDrafts ? undefined : 'PUBLISHED');
@@ -31,7 +50,7 @@ export class ProjectRepository {
         }
 
         if (targetVisibility) {
-          sql += ` AND (visibility = ? OR visibility IS NULL)`;
+          sql += ` AND visibility = ?`;
           params.push(targetVisibility);
         }
 
@@ -67,10 +86,16 @@ export class ProjectRepository {
 
         const projects: Project[] = await Promise.all(
           rows.map(async (r) => {
-            const techRows = await executeQuery<any>(
-              `SELECT technology_name FROM project_technologies WHERE project_id = ?`,
-              [r.id]
-            );
+            const [techRows, galleryRows] = await Promise.all([
+              executeQuery<any>(
+                `SELECT technology_name FROM project_technologies WHERE project_id = ?`,
+                [r.id]
+              ),
+              executeQuery<any>(
+                `SELECT media_id FROM project_media WHERE project_id = ? ORDER BY sort_order`,
+                [r.id]
+              ),
+            ]);
             return {
               id: r.id,
               slug: r.slug,
@@ -79,8 +104,10 @@ export class ProjectRepository {
               description: r.description || '',
               category: r.category || 'Software',
               techStack: techRows.map((t) => t.technology_name),
-              coverImage: r.cover_image,
-              galleryImages: [],
+              coverImage: r.cover_media_id ? `/api/media/${encodeURIComponent(r.cover_media_id)}/file` : undefined,
+              coverMediaId: r.cover_media_id || undefined,
+              galleryImages: galleryRows.map((image) => `/api/media/${encodeURIComponent(image.media_id)}/file`),
+              galleryMediaIds: galleryRows.map((image) => image.media_id),
               githubUrl: r.github_url,
               liveUrl: r.live_url,
               demoUrl: r.demo_url,
@@ -90,6 +117,8 @@ export class ProjectRepository {
               visibility: r.visibility || 'PUBLIC',
               problem: r.case_study_problem || r.problem || '',
               solution: r.case_study_solution || r.solution || '',
+              goal: r.case_study_goal || '',
+              result: r.case_study_result || '',
               architecture: r.architecture || '',
               caseStudyProblem: r.case_study_problem || '',
               caseStudySolution: r.case_study_solution || '',
@@ -106,57 +135,30 @@ export class ProjectRepository {
 
         return { projects, total: projects.length };
       } catch (err) {
-        console.warn('MariaDB query failed in projectRepository:', err);
+        throw err;
       }
     }
-
-    // Clean in-memory store
-    let list = [...db.projects];
-
-    if (targetStatus && targetStatus !== 'all') {
-      list = list.filter((p) => (p.status || 'PUBLISHED') === targetStatus);
-    }
-    if (targetVisibility) {
-      list = list.filter((p) => (p.visibility || 'PUBLIC') === targetVisibility);
-    }
-    if (options?.authorId) {
-      list = list.filter((p) => p.authorId === options.authorId);
-    }
-    if (options?.category && options.category !== 'all') {
-      list = list.filter((p) => p.category === options.category);
-    }
-    if (options?.featured !== undefined) {
-      list = list.filter((p) => p.featured === options.featured);
-    }
-    if (options?.search) {
-      const s = options.search.toLowerCase();
-      list = list.filter(
-        (p) =>
-          p.title.toLowerCase().includes(s) ||
-          p.shortDesc.toLowerCase().includes(s) ||
-          p.techStack.some((t) => t.toLowerCase().includes(s))
-      );
-    }
-
-    const total = list.length;
-    const limit = options?.limit || 20;
-    const page = options?.page || 1;
-    const paginated = list.slice((page - 1) * limit, page * limit);
-
-    return { projects: paginated, total };
+    throw new Error('Projektabfrage konnte nicht abgeschlossen werden.');
   }
 
   async findBySlug(slug: string): Promise<Project | null> {
     const dbStatus = getLastDatabaseStatus();
+    if (!dbStatus.connected) throw new Error('MariaDB ist nicht erreichbar. Projekte sind derzeit nicht verfügbar.');
     if (dbStatus.connected) {
       try {
         const rows = await executeQuery<any>(`SELECT * FROM projects WHERE slug = ? LIMIT 1`, [slug]);
         if (rows.length > 0) {
           const r = rows[0];
-          const techRows = await executeQuery<any>(
-            `SELECT technology_name FROM project_technologies WHERE project_id = ?`,
-            [r.id]
-          );
+          const [techRows, galleryRows] = await Promise.all([
+            executeQuery<any>(
+              `SELECT technology_name FROM project_technologies WHERE project_id = ?`,
+              [r.id]
+            ),
+            executeQuery<any>(
+              `SELECT media_id FROM project_media WHERE project_id = ? ORDER BY sort_order`,
+              [r.id]
+            ),
+          ]);
           return {
             id: r.id,
             slug: r.slug,
@@ -165,8 +167,10 @@ export class ProjectRepository {
             description: r.description || '',
             category: r.category || 'Software',
             techStack: techRows.map((t) => t.technology_name),
-            coverImage: r.cover_image,
-            galleryImages: [],
+            coverImage: r.cover_media_id ? `/api/media/${encodeURIComponent(r.cover_media_id)}/file` : undefined,
+            coverMediaId: r.cover_media_id || undefined,
+            galleryImages: galleryRows.map((image) => `/api/media/${encodeURIComponent(image.media_id)}/file`),
+            galleryMediaIds: galleryRows.map((image) => image.media_id),
             githubUrl: r.github_url,
             liveUrl: r.live_url,
             demoUrl: r.demo_url,
@@ -176,6 +180,8 @@ export class ProjectRepository {
             visibility: r.visibility || 'PUBLIC',
             problem: r.case_study_problem || r.problem || '',
             solution: r.case_study_solution || r.solution || '',
+            goal: r.case_study_goal || '',
+            result: r.case_study_result || '',
             architecture: r.architecture || '',
             caseStudyProblem: r.case_study_problem || '',
             caseStudySolution: r.case_study_solution || '',
@@ -189,15 +195,16 @@ export class ProjectRepository {
           };
         }
       } catch (err) {
-        console.warn('MariaDB query failed in projectRepository.findBySlug:', err);
+        throw err;
       }
     }
 
-    return db.projects.find((p) => p.slug === slug) || null;
+    return null;
   }
 
   async findById(id: string): Promise<Project | null> {
     const dbStatus = getLastDatabaseStatus();
+    if (!dbStatus.connected) throw new Error('MariaDB ist nicht erreichbar. Projekte sind derzeit nicht verfügbar.');
     if (dbStatus.connected) {
       try {
         const rows = await executeQuery<any>(`SELECT slug FROM projects WHERE id = ? LIMIT 1`, [id]);
@@ -205,13 +212,16 @@ export class ProjectRepository {
           return this.findBySlug(rows[0].slug);
         }
       } catch (err) {
-        console.warn('MariaDB query failed in projectRepository.findById:', err);
+        throw err;
       }
     }
-    return db.projects.find((p) => p.id === id) || null;
+    return null;
   }
 
-  async create(data: Partial<Project>): Promise<Project> {
+  async create(data: Partial<Project>, allowForeignMedia = false): Promise<Project> {
+    if (!data.authorId) {
+      throw new Error('Projekt benötigt eine serverseitig bestimmte Autor-ID.');
+    }
     const id = data.id || `proj-${Date.now()}`;
     const slug = data.slug || (data.title ? data.title.toLowerCase().replace(/[^a-z0-9]+/g, '-') : id);
     const now = new Date().toISOString();
@@ -226,8 +236,10 @@ export class ProjectRepository {
       description: data.description || '',
       category: data.category || 'Software',
       techStack: data.techStack || [],
-      coverImage: data.coverImage,
-      galleryImages: data.galleryImages || [],
+      coverImage: undefined,
+      coverMediaId: data.coverMediaId,
+      galleryImages: [],
+      galleryMediaIds: data.galleryMediaIds || [],
       githubUrl: data.githubUrl,
       liveUrl: data.liveUrl,
       demoUrl: data.demoUrl,
@@ -237,12 +249,14 @@ export class ProjectRepository {
       visibility: data.visibility || 'PUBLIC',
       problem: data.problem || data.caseStudyProblem || '',
       solution: data.solution || data.caseStudySolution || '',
+      goal: data.goal || '',
+      result: data.result || '',
       architecture: data.architecture || '',
       caseStudyProblem: data.caseStudyProblem || data.problem || '',
       caseStudySolution: data.caseStudySolution || data.solution || '',
       caseStudyLearnings: data.caseStudyLearnings || '',
       keyFeatures: data.keyFeatures || [],
-      authorId: data.authorId || 'anonymous',
+      authorId: data.authorId,
       featured: Boolean(data.featured),
       publishedAt,
       createdAt: now,
@@ -250,52 +264,61 @@ export class ProjectRepository {
     };
 
     const dbStatus = getLastDatabaseStatus();
-    if (dbStatus.connected) {
-      try {
-        await executeQuery(
-          `INSERT INTO projects (id, slug, title, short_description, description, category, cover_image, github_url, live_url, demo_url, documentation_url, video_url, status, visibility, architecture, case_study_problem, case_study_solution, case_study_learnings, author_id, featured, published_at, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
-          [
+    if (!dbStatus.connected) {
+      throw new Error('MariaDB ist nicht erreichbar; das Projekt wurde nicht gespeichert.');
+    }
+
+    await withTransaction(async (connection) => {
+      await this.validateMediaReferences(connection, newProj, allowForeignMedia);
+      await connection.execute(
+        `INSERT INTO projects (id, slug, title, short_description, description, category, cover_image, cover_media_id, github_url, live_url, demo_url, documentation_url, video_url, status, visibility, architecture, case_study_problem, case_study_solution, case_study_learnings, case_study_goal, case_study_result, author_id, featured, published_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+        [
             newProj.id,
             newProj.slug,
             newProj.title,
             newProj.shortDesc,
             newProj.description,
             newProj.category,
-            newProj.coverImage || null,
+            newProj.coverMediaId || null,
             newProj.githubUrl || null,
             newProj.liveUrl || null,
             newProj.demoUrl || null,
             newProj.documentationUrl || null,
             newProj.videoUrl || null,
             newProj.status,
-            newProj.visibility,
+            newProj.visibility || 'PUBLIC',
             newProj.architecture || null,
             newProj.caseStudyProblem || null,
             newProj.caseStudySolution || null,
             newProj.caseStudyLearnings || null,
+            newProj.goal || null,
+            newProj.result || null,
             newProj.authorId,
             newProj.featured ? 1 : 0,
             publishedAt ? new Date(publishedAt) : null,
-          ]
-        );
+        ]
+      );
 
-        for (const tech of newProj.techStack) {
-          await executeQuery(
+      for (const tech of newProj.techStack) {
+        await connection.execute(
             `INSERT INTO project_technologies (project_id, technology_name) VALUES (?, ?)`,
             [newProj.id, tech]
-          );
-        }
-      } catch (err) {
-        console.warn('MariaDB insert failed in projectRepository.create:', err);
+        );
       }
-    }
 
-    db.projects.unshift(newProj);
+      for (const [sortOrder, mediaId] of newProj.galleryMediaIds!.entries()) {
+        await connection.execute(
+          `INSERT INTO project_media (project_id, media_id, sort_order) VALUES (?, ?, ?)`,
+          [newProj.id, mediaId, sortOrder]
+        );
+      }
+    });
+
     return newProj;
   }
 
-  async update(id: string, data: Partial<Project>, authorId?: string): Promise<Project | null> {
+  async update(id: string, data: Partial<Project>, authorId?: string, allowForeignMedia = false): Promise<Project | null> {
     const existing = await this.findById(id);
     if (!existing) return null;
 
@@ -307,6 +330,13 @@ export class ProjectRepository {
     const updated: Project = {
       ...existing,
       ...data,
+      id: existing.id,
+      authorId: existing.authorId,
+      coverImage: undefined,
+      coverMediaId: data.coverMediaId !== undefined ? data.coverMediaId : existing.coverMediaId,
+      galleryImages: [],
+      galleryMediaIds: data.galleryMediaIds !== undefined ? data.galleryMediaIds : existing.galleryMediaIds || [],
+      createdAt: existing.createdAt,
       updatedAt: now,
       publishedAt:
         data.status === 'PUBLISHED' && existing.status !== 'PUBLISHED'
@@ -315,57 +345,71 @@ export class ProjectRepository {
     };
 
     const dbStatus = getLastDatabaseStatus();
-    if (dbStatus.connected) {
-      try {
-        await executeQuery(
-          `UPDATE projects SET 
-            title = ?, slug = ?, short_description = ?, description = ?, category = ?, 
-            cover_image = ?, github_url = ?, live_url = ?, demo_url = ?, documentation_url = ?, video_url = ?,
-            status = ?, visibility = ?, architecture = ?, case_study_problem = ?, case_study_solution = ?, 
-            case_study_learnings = ?, featured = ?, published_at = ?, updated_at = NOW()
-           WHERE id = ?`,
-          [
-            updated.title,
-            updated.slug,
-            updated.shortDesc,
-            updated.description,
-            updated.category,
-            updated.coverImage || null,
-            updated.githubUrl || null,
-            updated.liveUrl || null,
-            updated.demoUrl || null,
-            updated.documentationUrl || null,
-            updated.videoUrl || null,
-            updated.status,
-            updated.visibility || 'PUBLIC',
-            updated.architecture || null,
-            updated.caseStudyProblem || null,
-            updated.caseStudySolution || null,
-            updated.caseStudyLearnings || null,
-            updated.featured ? 1 : 0,
-            updated.publishedAt ? new Date(updated.publishedAt) : null,
-            id,
-          ]
-        );
+    if (!dbStatus.connected) {
+      throw new Error('MariaDB ist nicht erreichbar; das Projekt wurde nicht gespeichert.');
+    }
 
-        if (data.techStack) {
-          await executeQuery(`DELETE FROM project_technologies WHERE project_id = ?`, [id]);
-          for (const tech of data.techStack) {
-            await executeQuery(
+    await withTransaction(async (connection) => {
+      await this.validateMediaReferences(connection, updated, allowForeignMedia);
+      const ownershipClause = authorId ? ' AND author_id = ?' : '';
+      const values = [
+        updated.title,
+        updated.slug,
+        updated.shortDesc,
+        updated.description,
+        updated.category,
+        updated.coverMediaId || null,
+        updated.githubUrl || null,
+        updated.liveUrl || null,
+        updated.demoUrl || null,
+        updated.documentationUrl || null,
+        updated.videoUrl || null,
+        updated.status,
+        updated.visibility || 'PUBLIC',
+        updated.architecture || null,
+        updated.caseStudyProblem || null,
+        updated.caseStudySolution || null,
+        updated.caseStudyLearnings || null,
+        updated.goal || null,
+        updated.result || null,
+        updated.featured ? 1 : 0,
+        updated.publishedAt ? new Date(updated.publishedAt) : null,
+        id,
+        ...(authorId ? [authorId] : []),
+      ];
+
+      await connection.execute(
+        `UPDATE projects SET
+            title = ?, slug = ?, short_description = ?, description = ?, category = ?, 
+            cover_image = NULL, cover_media_id = ?, github_url = ?, live_url = ?, demo_url = ?, documentation_url = ?, video_url = ?,
+            status = ?, visibility = ?, architecture = ?, case_study_problem = ?, case_study_solution = ?, 
+            case_study_learnings = ?, case_study_goal = ?, case_study_result = ?,
+            featured = ?, published_at = ?, updated_at = NOW()
+           WHERE id = ?${ownershipClause}`,
+        values
+      );
+
+      if (data.techStack !== undefined) {
+        await connection.execute(`DELETE FROM project_technologies WHERE project_id = ?`, [id]);
+        for (const tech of data.techStack) {
+          await connection.execute(
               `INSERT INTO project_technologies (project_id, technology_name) VALUES (?, ?)`,
               [id, tech]
-            );
-          }
+          );
         }
-      } catch (err) {
-        console.warn('MariaDB update failed in projectRepository.update:', err);
       }
-    }
 
-    const idx = db.projects.findIndex((p) => p.id === id);
-    if (idx >= 0) {
-      db.projects[idx] = updated;
-    }
+      if (data.galleryMediaIds !== undefined) {
+        await connection.execute(`DELETE FROM project_media WHERE project_id = ?`, [id]);
+        for (const [sortOrder, mediaId] of updated.galleryMediaIds!.entries()) {
+          await connection.execute(
+            `INSERT INTO project_media (project_id, media_id, sort_order) VALUES (?, ?, ?)`,
+            [id, mediaId, sortOrder]
+          );
+        }
+      }
+    });
+
     return updated;
   }
 
@@ -378,23 +422,22 @@ export class ProjectRepository {
     }
 
     const dbStatus = getLastDatabaseStatus();
-    if (dbStatus.connected) {
-      try {
-        await executeQuery(`DELETE FROM project_technologies WHERE project_id = ?`, [id]);
-        await executeQuery(`DELETE FROM project_key_points WHERE project_id = ?`, [id]);
-        await executeQuery(`DELETE FROM project_snippets WHERE project_id = ?`, [id]);
-        await executeQuery(`DELETE FROM projects WHERE id = ?`, [id]);
-      } catch (err) {
-        console.warn('MariaDB delete failed in projectRepository.delete:', err);
-      }
+    if (!dbStatus.connected) {
+      throw new Error('MariaDB ist nicht erreichbar; das Projekt wurde nicht gelöscht.');
     }
 
-    const idx = db.projects.findIndex((p) => p.id === id);
-    if (idx >= 0) {
-      db.projects.splice(idx, 1);
-      return true;
-    }
-    return false;
+    const [deleteResult] = await withTransaction(async (connection) => {
+      const ownershipClause = authorId ? ' AND author_id = ?' : '';
+      return connection.execute(
+        `DELETE FROM projects WHERE id = ?${ownershipClause}`,
+        authorId ? [id, authorId] : [id]
+      );
+    });
+
+    const wasDeleted = (deleteResult as { affectedRows: number }).affectedRows > 0;
+    if (!wasDeleted) return false;
+
+    return true;
   }
 }
 

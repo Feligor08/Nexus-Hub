@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { GoogleGenAI } from '@google/genai';
 import { databaseHealthService } from '../services/databaseHealthService';
 import { authService } from '../services/authService';
@@ -13,8 +13,14 @@ import { mediaRepository } from '../repositories/mediaRepository';
 import { downloadRepository } from '../repositories/downloadRepository';
 import { runMigrations } from '../migrations/migrator';
 import { authenticate, requireAuth, requireRole, AuthenticatedRequest } from '../middleware/authMiddleware';
-import { db } from '../db';
-import { User, Order, ProductVersion } from '../models/types';
+import { User, Order, ProductVersion, Project, Product } from '../models/types';
+import { getLastDatabaseStatus, withTransaction } from '../config/database';
+import { mediaStorage, getUploadCategory } from '../services/mediaStorage';
+import multer from 'multer';
+import { randomUUID } from 'crypto';
+import { RowDataPacket } from 'mysql2';
+import path from 'path';
+import { executeQuery } from '../config/database';
 
 export const apiRouter = Router();
 
@@ -48,6 +54,200 @@ const logAudit = async (action: string, details: string, req: AuthenticatedReque
   const userId = req.user?.id || 'unauthenticated';
   const username = req.user?.username || 'anonymous';
   await auditRepository.log(action, userId, username, details, ip);
+};
+
+const isAdmin = (user?: User) => Boolean(user && (user.role === 'ADMIN' || user.roles?.includes('ADMIN')));
+
+const validUrl = (value: unknown, allowLocalPath = false): boolean => {
+  if (value === undefined || value === null || value === '') return true;
+  if (typeof value !== 'string' || value.length > 1000) return false;
+  if (allowLocalPath && value.startsWith('/') && !value.startsWith('//')) return true;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+  } catch {
+    return false;
+  }
+};
+
+const validateProjectPayload = (body: unknown): { data?: Partial<Project>; error?: string } => {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { error: 'Ungültige Projektdaten.' };
+  }
+
+  const input = body as Partial<Project>;
+  if (typeof input.title !== 'string' || !input.title.trim() || input.title.length > 200) {
+    return { error: 'Der Titel muss zwischen 1 und 200 Zeichen lang sein.' };
+  }
+  if (typeof input.slug !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.slug) || input.slug.length > 100) {
+    return { error: 'Der Slug darf nur Kleinbuchstaben, Zahlen und Bindestriche enthalten.' };
+  }
+  if (typeof input.shortDesc !== 'string' || !input.shortDesc.trim() || input.shortDesc.length > 500) {
+    return { error: 'Die Kurzbeschreibung muss zwischen 1 und 500 Zeichen lang sein.' };
+  }
+  if (typeof input.description !== 'string' || !input.description.trim() || input.description.length > 50000) {
+    return { error: 'Die Beschreibung muss zwischen 1 und 50000 Zeichen lang sein.' };
+  }
+  if (input.status !== undefined && !['DRAFT', 'PUBLISHED', 'ARCHIVED'].includes(input.status)) {
+    return { error: 'Ungültiger Projektstatus.' };
+  }
+  if (input.visibility !== undefined && !['PUBLIC', 'PRIVATE'].includes(input.visibility)) {
+    return { error: 'Ungültige Sichtbarkeit.' };
+  }
+  if (input.techStack !== undefined && (!Array.isArray(input.techStack) || input.techStack.length > 50 || input.techStack.some((item) => typeof item !== 'string' || !item.trim() || item.length > 100))) {
+    return { error: 'Die Technologieliste ist ungültig.' };
+  }
+  if (input.galleryMediaIds !== undefined && (!Array.isArray(input.galleryMediaIds) || input.galleryMediaIds.length > 20 || input.galleryMediaIds.some((id) => typeof id !== 'string' || id.length > 64))) {
+    return { error: 'Die Projektgalerie enthält ungültige Medien-IDs.' };
+  }
+  if (![input.githubUrl, input.liveUrl, input.demoUrl, input.documentationUrl, input.videoUrl].every((url) => validUrl(url))) {
+    return { error: 'Projektlinks müssen gültige HTTP- oder HTTPS-URLs sein.' };
+  }
+  if (input.coverMediaId !== undefined && (typeof input.coverMediaId !== 'string' || input.coverMediaId.length > 64)) {
+    return { error: 'Die Cover-Medien-ID ist ungültig.' };
+  }
+
+  return {
+    data: {
+      title: input.title.trim(),
+      slug: input.slug,
+      shortDesc: input.shortDesc.trim(),
+      description: input.description.trim(),
+      category: input.category,
+      status: input.status,
+      visibility: input.visibility,
+      featured: input.featured,
+      techStack: input.techStack,
+      problem: input.problem,
+      solution: input.solution,
+      goal: input.goal,
+      result: input.result,
+      caseStudyProblem: input.caseStudyProblem,
+      caseStudySolution: input.caseStudySolution,
+      caseStudyLearnings: input.caseStudyLearnings,
+      architecture: input.architecture,
+      githubUrl: input.githubUrl,
+      liveUrl: input.liveUrl,
+      demoUrl: input.demoUrl,
+      documentationUrl: input.documentationUrl,
+      videoUrl: input.videoUrl,
+      coverMediaId: input.coverMediaId,
+      galleryMediaIds: input.galleryMediaIds,
+    },
+  };
+};
+
+const validateProductPayload = (body: unknown): { data?: Partial<Product>; error?: string } => {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { error: 'Ungültige Produktdaten.' };
+  }
+
+  const input = body as Partial<Product>;
+  if (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 200) {
+    return { error: 'Der Produktname muss zwischen 1 und 200 Zeichen lang sein.' };
+  }
+  if (typeof input.slug !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.slug) || input.slug.length > 100) {
+    return { error: 'Der Slug darf nur Kleinbuchstaben, Zahlen und Bindestriche enthalten.' };
+  }
+  if (typeof input.shortDesc !== 'string' || !input.shortDesc.trim() || input.shortDesc.length > 500) {
+    return { error: 'Die Kurzbeschreibung muss zwischen 1 und 500 Zeichen lang sein.' };
+  }
+  if (typeof input.description !== 'string' || !input.description.trim() || input.description.length > 50000) {
+    return { error: 'Die Beschreibung muss zwischen 1 und 50000 Zeichen lang sein.' };
+  }
+  if (typeof input.category !== 'string' || !input.category.trim() || input.category.length > 50) {
+    return { error: 'Eine gültige Produktkategorie ist erforderlich.' };
+  }
+  if (typeof input.price !== 'number' || !Number.isFinite(input.price) || input.price < 0 || input.price > 99999999.99) {
+    return { error: 'Der Produktpreis ist ungültig.' };
+  }
+  if (typeof input.currency !== 'string' || !/^[A-Z]{3}$/.test(input.currency)) {
+    return { error: 'Die Währung muss ein gültiger ISO-Code sein.' };
+  }
+  if (input.status !== undefined && !['DRAFT', 'PUBLISHED', 'ARCHIVED'].includes(input.status)) {
+    return { error: 'Ungültiger Produktstatus.' };
+  }
+  if (input.visibility !== undefined && !['PUBLIC', 'PRIVATE'].includes(input.visibility)) {
+    return { error: 'Ungültige Sichtbarkeit.' };
+  }
+  const validTextArray = (items: unknown, maxItems: number, maxLength: number) =>
+    items === undefined || (Array.isArray(items) && items.length <= maxItems && items.every((item) => typeof item === 'string' && item.trim().length > 0 && item.length <= maxLength));
+  if (!validTextArray(input.tags, 30, 50) || !validTextArray(input.features, 50, 500) || !validTextArray(input.requirements, 50, 500)) {
+    return { error: 'Tags, Features oder Requirements enthalten ungültige Werte.' };
+  }
+  if (typeof input.version !== 'string' || !input.version.trim() || input.version.length > 30) {
+    return { error: 'Die Version muss zwischen 1 und 30 Zeichen lang sein.' };
+  }
+  if (input.changelog !== undefined && (typeof input.changelog !== 'string' || input.changelog.length > 50000)) {
+    return { error: 'Der Changelog ist zu lang.' };
+  }
+  if (input.metaTitle !== undefined && (typeof input.metaTitle !== 'string' || input.metaTitle.length > 255)) {
+    return { error: 'Der SEO-Titel ist zu lang.' };
+  }
+  if (input.metaDescription !== undefined && (typeof input.metaDescription !== 'string' || input.metaDescription.length > 500)) {
+    return { error: 'Die SEO-Beschreibung ist zu lang.' };
+  }
+  if (input.galleryMediaIds !== undefined && (!Array.isArray(input.galleryMediaIds) || input.galleryMediaIds.length > 20 || input.galleryMediaIds.some((id) => typeof id !== 'string' || id.length > 64))) {
+    return { error: 'Die Produktgalerie enthält ungültige Medien-IDs.' };
+  }
+  if (![input.demoFileUrl, input.documentationUrl].every((url) => validUrl(url))) {
+    return { error: 'Produktlinks müssen gültige HTTP- oder HTTPS-URLs sein.' };
+  }
+
+  return {
+    data: {
+      name: input.name.trim(), slug: input.slug, shortDesc: input.shortDesc.trim(),
+      description: input.description.trim(), category: input.category, price: input.price,
+      currency: input.currency, version: input.version, status: input.status,
+      visibility: input.visibility, featured: input.featured,
+      digitalProduct: input.digitalProduct, fileFormat: input.fileFormat, fileSize: input.fileSize,
+      license: input.license, tags: input.tags, features: input.features,
+      requirements: input.requirements, changelog: input.changelog,
+      metaTitle: input.metaTitle, metaDescription: input.metaDescription,
+      coverMediaId: input.coverMediaId, galleryMediaIds: input.galleryMediaIds,
+      downloadMediaId: input.downloadMediaId, demoFileUrl: input.demoFileUrl,
+      documentationUrl: input.documentationUrl,
+    },
+  };
+};
+
+const sendProductWriteError = (res: Response, error: unknown) => {
+  const code = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : '';
+  console.error('Product CMS write failed:', error);
+  if (!getLastDatabaseStatus().connected) {
+    return res.status(503).json({ success: false, error: { message: 'MariaDB ist nicht erreichbar. Das Produkt wurde nicht gespeichert.' } });
+  }
+  if (code === 'ER_DUP_ENTRY') {
+    return res.status(409).json({ success: false, error: { message: 'Dieser Produkt-Slug ist bereits vergeben.' } });
+  }
+  if (error instanceof Error && error.message.startsWith('Mediendatei')) {
+    return res.status(403).json({ success: false, error: { message: error.message } });
+  }
+  return res.status(500).json({ success: false, error: { message: 'Das Produkt konnte nicht gespeichert werden.' } });
+};
+
+const sendProjectWriteError = (res: Response, error: unknown) => {
+  const code = typeof error === 'object' && error !== null && 'code' in error
+    ? String(error.code)
+    : '';
+  console.error('Project CMS write failed:', error);
+
+  if (!getLastDatabaseStatus().connected) {
+    return res.status(503).json({ success: false, error: { message: 'MariaDB ist nicht erreichbar. Das Projekt wurde nicht gespeichert.' } });
+  }
+  if (code === 'ER_DUP_ENTRY') {
+    return res.status(409).json({ success: false, error: { message: 'Dieser Projekt-Slug ist bereits vergeben.' } });
+  }
+  return res.status(500).json({ success: false, error: { message: 'Das Projekt konnte nicht gespeichert werden.' } });
+};
+
+const requireProjectDatabase = (res: Response): boolean => {
+  if (getLastDatabaseStatus().connected) return true;
+  res.status(503).json({
+    success: false,
+    error: { message: 'MariaDB ist nicht erreichbar. Projektänderungen sind derzeit nicht möglich.' },
+  });
+  return false;
 };
 
 // -------------------------------------------------------------
@@ -232,34 +432,10 @@ apiRouter.post('/auth/logout', async (req: AuthenticatedRequest, res: Response) 
   });
 });
 
-// Switch role (Testing & RBAC Demonstration)
-apiRouter.post('/auth/switch-role', async (req: AuthenticatedRequest, res: Response) => {
-  const { role } = req.body;
-  const allowed = ['GUEST', 'USER', 'CREATOR', 'MODERATOR', 'ADMIN'];
-  if (!allowed.includes(role)) {
-    return res.status(400).json({ success: false, error: { message: 'Ungültige Rolle' } });
-  }
-
-  // If user is logged in, update their role
-  if (req.user) {
-    const updated = await userRepository.updateRole(req.user.id, role);
-    await logAudit('ROLE_SWITCH', `Rolle gewechselt zu ${role}`, req);
-    return res.json({ success: true, user: updated, data: updated });
-  }
-
-  // If not logged in, log in as corresponding demo profile or create demo session
-  const targetUser = db.users.find((u) => u.role === role) || db.users[0];
-  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
-  const token = authService.generateSessionToken();
-  await userRepository.createSession(targetUser.id, token, ip);
-  setSessionCookie(res, token);
-
-  res.json({
-    success: true,
-    authenticated: true,
-    user: authService.sanitizeUser(targetUser),
-    data: authService.sanitizeUser(targetUser),
-    token,
+apiRouter.post('/auth/switch-role', (_req: Request, res: Response) => {
+  res.status(410).json({
+    success: false,
+    error: { message: 'Rollen können nicht per API gewechselt werden. Admins verwalten Rollen serverseitig.' },
   });
 });
 
@@ -317,55 +493,121 @@ apiRouter.get('/projects/featured', async (req: Request, res: Response) => {
 
 apiRouter.get('/projects/:slug', async (req: Request, res: Response) => {
   const project = await projectRepository.findBySlug(req.params.slug);
-  if (!project) {
+  if (!project || project.status !== 'PUBLISHED' || project.visibility !== 'PUBLIC') {
     return res.status(404).json({ success: false, error: { message: 'Projekt nicht gefunden' } });
   }
   res.json({ success: true, data: project });
 });
 
 apiRouter.post('/projects', requireRole('CREATOR', 'ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
-  const projectData = {
-    ...req.body,
-    authorId: req.user?.id || 'usr-admin-feligor',
-  };
+  const validation = validateProjectPayload(req.body);
+  if (!validation.data) {
+    return res.status(400).json({ success: false, error: { message: validation.error } });
+  }
 
-  const created = await projectRepository.create(projectData);
-  await logAudit('CREATE_PROJECT', `Projekt erstellt: ${created.title}`, req);
-  res.status(201).json({ success: true, data: created });
+  try {
+    const adminAccess = isAdmin(req.user);
+    const created = await projectRepository.create({
+      ...validation.data,
+      status: validation.data.status || 'DRAFT',
+      authorId: req.user!.id,
+    }, adminAccess);
+    await logAudit('CREATE_PROJECT', `Projekt erstellt: ${created.title}`, req);
+    return res.status(201).json({ success: true, data: created });
+  } catch (error) {
+    return sendProjectWriteError(res, error);
+  }
 });
 
 apiRouter.put('/projects/:id', requireRole('CREATOR', 'ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
-  const authorCheck = req.user?.role === 'ADMIN' ? undefined : req.user?.id;
-  const updated = await projectRepository.update(req.params.id, req.body, authorCheck);
-  if (!updated) {
-    return res.status(404).json({ success: false, error: { message: 'Projekt nicht gefunden oder keine Berechtigung' } });
+  if (!requireProjectDatabase(res)) return;
+  const existing = await projectRepository.findById(req.params.id);
+  if (!existing) {
+    return res.status(404).json({ success: false, error: { message: 'Projekt nicht gefunden' } });
   }
-  await logAudit('UPDATE_PROJECT', `Projekt aktualisiert: ${updated.title}`, req);
-  res.json({ success: true, data: updated });
+  const adminAccess = isAdmin(req.user);
+  if (!adminAccess && existing.authorId !== req.user!.id) {
+    return res.status(403).json({ success: false, error: { message: 'Du darfst dieses Projekt nicht bearbeiten.' } });
+  }
+
+  const validation = validateProjectPayload(req.body);
+  if (!validation.data) {
+    return res.status(400).json({ success: false, error: { message: validation.error } });
+  }
+
+  try {
+    const updated = await projectRepository.update(
+      req.params.id,
+      validation.data,
+      adminAccess ? undefined : req.user!.id,
+      adminAccess
+    );
+    if (!updated) {
+      return res.status(404).json({ success: false, error: { message: 'Projekt nicht gefunden' } });
+    }
+    await logAudit('UPDATE_PROJECT', `Projekt aktualisiert: ${updated.title}`, req);
+    return res.json({ success: true, data: updated });
+  } catch (error) {
+    return sendProjectWriteError(res, error);
+  }
 });
 
 apiRouter.patch('/projects/:id/status', requireRole('CREATOR', 'ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
+  if (!requireProjectDatabase(res)) return;
   const { status } = req.body;
   if (!['DRAFT', 'PUBLISHED', 'ARCHIVED'].includes(status)) {
     return res.status(400).json({ success: false, error: { message: 'Ungültiger Status' } });
   }
-  const authorCheck = req.user?.role === 'ADMIN' ? undefined : req.user?.id;
-  const updated = await projectRepository.update(req.params.id, { status }, authorCheck);
-  if (!updated) {
-    return res.status(404).json({ success: false, error: { message: 'Projekt nicht gefunden oder keine Berechtigung' } });
+  const existing = await projectRepository.findById(req.params.id);
+  if (!existing) {
+    return res.status(404).json({ success: false, error: { message: 'Projekt nicht gefunden' } });
   }
-  await logAudit('PROJECT_STATUS_CHANGED', `Projekt-Status: ${updated.title} -> ${status}`, req);
-  res.json({ success: true, data: updated });
+  const adminAccess = isAdmin(req.user);
+  if (!adminAccess && existing.authorId !== req.user!.id) {
+    return res.status(403).json({ success: false, error: { message: 'Du darfst dieses Projekt nicht ändern.' } });
+  }
+
+  try {
+    const updated = await projectRepository.update(
+      req.params.id,
+      { status },
+      adminAccess ? undefined : req.user!.id,
+      adminAccess
+    );
+    if (!updated) {
+      return res.status(404).json({ success: false, error: { message: 'Projekt nicht gefunden' } });
+    }
+    await logAudit('PROJECT_STATUS_CHANGED', `Projekt-Status: ${updated.title} -> ${status}`, req);
+    return res.json({ success: true, data: updated });
+  } catch (error) {
+    return sendProjectWriteError(res, error);
+  }
 });
 
 apiRouter.delete('/projects/:id', requireRole('CREATOR', 'ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
-  const authorCheck = req.user?.role === 'ADMIN' ? undefined : req.user?.id;
-  const success = await projectRepository.delete(req.params.id, authorCheck);
-  if (!success) {
-    return res.status(404).json({ success: false, error: { message: 'Projekt nicht gefunden oder keine Berechtigung' } });
+  if (!requireProjectDatabase(res)) return;
+  const existing = await projectRepository.findById(req.params.id);
+  if (!existing) {
+    return res.status(404).json({ success: false, error: { message: 'Projekt nicht gefunden' } });
   }
-  await logAudit('DELETE_PROJECT', `Projekt gelöscht: ${req.params.id}`, req);
-  res.json({ success: true, message: 'Projekt erfolgreich gelöscht' });
+  const adminAccess = isAdmin(req.user);
+  if (!adminAccess && existing.authorId !== req.user!.id) {
+    return res.status(403).json({ success: false, error: { message: 'Du darfst dieses Projekt nicht löschen.' } });
+  }
+
+  try {
+    const success = await projectRepository.delete(
+      req.params.id,
+      adminAccess ? undefined : req.user!.id
+    );
+    if (!success) {
+      return res.status(404).json({ success: false, error: { message: 'Projekt nicht gefunden' } });
+    }
+    await logAudit('DELETE_PROJECT', `Projekt gelöscht: ${req.params.id}`, req);
+    return res.json({ success: true, message: 'Projekt erfolgreich gelöscht' });
+  } catch (error) {
+    return sendProjectWriteError(res, error);
+  }
 });
 
 // -------------------------------------------------------------
@@ -373,48 +615,105 @@ apiRouter.delete('/projects/:id', requireRole('CREATOR', 'ADMIN'), async (req: A
 // -------------------------------------------------------------
 apiRouter.get('/products', async (req: Request, res: Response) => {
   const { category, search, page, limit, status, includeDrafts } = req.query;
-  const result = await productRepository.findAll({
-    category: category ? String(category) : undefined,
-    search: search ? String(search) : undefined,
-    status: status ? String(status) : undefined,
-    includeDrafts: includeDrafts === 'true',
-    page: page ? Number(page) : undefined,
-    limit: limit ? Number(limit) : undefined,
-  });
-  res.json({ success: true, data: result.products, total: result.total });
+  const user = req as AuthenticatedRequest;
+  const privileged = Boolean(user.user && (
+    user.user.role === 'ADMIN' || user.user.role === 'CREATOR' ||
+    user.user.roles?.includes('ADMIN') || user.user.roles?.includes('CREATOR')
+  ));
+  const cmsQuery = includeDrafts === 'true' || status !== undefined;
+  if (cmsQuery && !privileged) {
+    return res.status(user.user ? 403 : 401).json({ success: false, error: { message: 'Creator- oder Administrator-Rolle erforderlich.' } });
+  }
+
+  try {
+    const result = await productRepository.findAll({
+      category: category ? String(category) : undefined,
+      search: search ? String(search) : undefined,
+      status: cmsQuery && status ? String(status) : 'PUBLISHED',
+      visibility: cmsQuery ? undefined : 'PUBLIC',
+      authorId: cmsQuery && user.user && !isAdmin(user.user) ? user.user.id : undefined,
+      includeDrafts: cmsQuery,
+      page: page ? Number(page) : undefined,
+      limit: limit ? Number(limit) : undefined,
+    });
+    return res.json({ success: true, data: result.products, total: result.total });
+  } catch (error) {
+    console.error('Product list query failed:', error);
+    return res.status(getLastDatabaseStatus().connected ? 500 : 503).json({ success: false, error: { message: 'Produkte konnten nicht aus MariaDB geladen werden.' } });
+  }
 });
 
 apiRouter.get('/products/featured', async (req: Request, res: Response) => {
-  const result = await productRepository.findAll({ featured: true, limit: 6 });
-  res.json({ success: true, data: result.products });
+  try {
+    const result = await productRepository.findAll({ featured: true, status: 'PUBLISHED', visibility: 'PUBLIC', limit: 6 });
+    return res.json({ success: true, data: result.products });
+  } catch (error) {
+    console.error('Featured product query failed:', error);
+    return res.status(getLastDatabaseStatus().connected ? 500 : 503).json({ success: false, error: { message: 'Produkte konnten nicht aus MariaDB geladen werden.' } });
+  }
 });
 
-apiRouter.get('/products/:slug', async (req: Request, res: Response) => {
-  const product = await productRepository.findBySlug(req.params.slug);
-  if (!product) {
-    return res.status(404).json({ success: false, error: { message: 'Produkt nicht gefunden' } });
+apiRouter.get('/products/:slug', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const product = await productRepository.findBySlug(req.params.slug);
+    if (!product) {
+      return res.status(404).json({ success: false, error: { message: 'Produkt nicht gefunden' } });
+    }
+    const publicProduct = product.status === 'PUBLISHED' && product.visibility === 'PUBLIC';
+    const adminAccess = isAdmin(req.user);
+    if (!publicProduct && !adminAccess && product.authorId !== req.user?.id) {
+      return res.status(404).json({ success: false, error: { message: 'Produkt nicht gefunden' } });
+    }
+    return res.json({ success: true, data: product });
+  } catch (error) {
+    console.error('Product detail query failed:', error);
+    return res.status(getLastDatabaseStatus().connected ? 500 : 503).json({ success: false, error: { message: 'Produkt konnte nicht aus MariaDB geladen werden.' } });
   }
-  res.json({ success: true, data: product });
 });
 
 apiRouter.post('/products', requireRole('CREATOR', 'ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
-  const productData = {
-    ...req.body,
-    authorId: req.user?.id || 'usr-admin-feligor',
-  };
-  const created = await productRepository.create(productData);
-  await logAudit('CREATE_PRODUCT', `Produkt erstellt: ${created.name}`, req);
-  res.status(201).json({ success: true, data: created });
+  const validation = validateProductPayload(req.body);
+  if (!validation.data) {
+    return res.status(400).json({ success: false, error: { message: validation.error } });
+  }
+  try {
+    const adminAccess = isAdmin(req.user);
+    const created = await productRepository.create({
+      ...validation.data,
+      status: validation.data.status || 'DRAFT',
+      authorId: req.user!.id,
+    }, adminAccess);
+    await logAudit('CREATE_PRODUCT', `Produkt erstellt: ${created.name}`, req);
+    return res.status(201).json({ success: true, data: created });
+  } catch (error) {
+    return sendProductWriteError(res, error);
+  }
 });
 
 apiRouter.put('/products/:id', requireRole('CREATOR', 'ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
-  const authorCheck = req.user?.role === 'ADMIN' ? undefined : req.user?.id;
-  const updated = await productRepository.update(req.params.id, req.body, authorCheck);
-  if (!updated) {
-    return res.status(404).json({ success: false, error: { message: 'Produkt nicht gefunden oder keine Berechtigung' } });
+  if (!getLastDatabaseStatus().connected) {
+    return res.status(503).json({ success: false, error: { message: 'MariaDB ist nicht erreichbar. Produktänderungen sind derzeit nicht möglich.' } });
   }
-  await logAudit('UPDATE_PRODUCT', `Produkt aktualisiert: ${updated.name}`, req);
-  res.json({ success: true, data: updated });
+  const existing = await productRepository.findById(req.params.id);
+  if (!existing) {
+    return res.status(404).json({ success: false, error: { message: 'Produkt nicht gefunden' } });
+  }
+  const adminAccess = isAdmin(req.user);
+  if (!adminAccess && existing.authorId !== req.user!.id) {
+    return res.status(403).json({ success: false, error: { message: 'Du darfst dieses Produkt nicht bearbeiten.' } });
+  }
+  const validation = validateProductPayload(req.body);
+  if (!validation.data) {
+    return res.status(400).json({ success: false, error: { message: validation.error } });
+  }
+  try {
+    const updated = await productRepository.update(req.params.id, validation.data, adminAccess ? undefined : req.user!.id, adminAccess);
+    if (!updated) return res.status(404).json({ success: false, error: { message: 'Produkt nicht gefunden.' } });
+    await logAudit('UPDATE_PRODUCT', `Produkt aktualisiert: ${updated.name}`, req);
+    return res.json({ success: true, data: updated });
+  } catch (error) {
+    return sendProductWriteError(res, error);
+  }
 });
 
 apiRouter.patch('/products/:id/status', requireRole('CREATOR', 'ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
@@ -422,33 +721,56 @@ apiRouter.patch('/products/:id/status', requireRole('CREATOR', 'ADMIN'), async (
   if (!['DRAFT', 'PUBLISHED', 'ARCHIVED'].includes(status)) {
     return res.status(400).json({ success: false, error: { message: 'Ungültiger Status' } });
   }
-  const authorCheck = req.user?.role === 'ADMIN' ? undefined : req.user?.id;
-  const updated = await productRepository.update(req.params.id, { status, published: status === 'PUBLISHED' }, authorCheck);
-  if (!updated) {
-    return res.status(404).json({ success: false, error: { message: 'Produkt nicht gefunden oder keine Berechtigung' } });
+  if (!getLastDatabaseStatus().connected) {
+    return res.status(503).json({ success: false, error: { message: 'MariaDB ist nicht erreichbar. Produktstatus konnte nicht geändert werden.' } });
   }
-  await logAudit('PRODUCT_STATUS_CHANGED', `Produkt-Status: ${updated.name} -> ${status}`, req);
-  res.json({ success: true, data: updated });
+  const existing = await productRepository.findById(req.params.id);
+  if (!existing) return res.status(404).json({ success: false, error: { message: 'Produkt nicht gefunden.' } });
+  const adminAccess = isAdmin(req.user);
+  if (!adminAccess && existing.authorId !== req.user!.id) {
+    return res.status(403).json({ success: false, error: { message: 'Du darfst dieses Produkt nicht veröffentlichen oder archivieren.' } });
+  }
+  try {
+    const updated = await productRepository.update(req.params.id, { status }, adminAccess ? undefined : req.user!.id, adminAccess);
+    if (!updated) return res.status(404).json({ success: false, error: { message: 'Produkt nicht gefunden.' } });
+    await logAudit('PRODUCT_STATUS_CHANGED', `Produkt-Status: ${updated.name} -> ${status}`, req);
+    return res.json({ success: true, data: updated });
+  } catch (error) {
+    return sendProductWriteError(res, error);
+  }
 });
 
 apiRouter.delete('/products/:id', requireRole('CREATOR', 'ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
-  const authorCheck = req.user?.role === 'ADMIN' ? undefined : req.user?.id;
-  const success = await productRepository.delete(req.params.id, authorCheck);
-  if (!success) {
-    return res.status(404).json({ success: false, error: { message: 'Produkt nicht gefunden oder keine Berechtigung' } });
+  if (!getLastDatabaseStatus().connected) {
+    return res.status(503).json({ success: false, error: { message: 'MariaDB ist nicht erreichbar. Produkt kann nicht gelöscht werden.' } });
   }
-  await logAudit('DELETE_PRODUCT', `Produkt gelöscht: ${req.params.id}`, req);
-  res.json({ success: true, message: 'Produkt gelöscht' });
+  const existing = await productRepository.findById(req.params.id);
+  if (!existing) return res.status(404).json({ success: false, error: { message: 'Produkt nicht gefunden.' } });
+  const adminAccess = isAdmin(req.user);
+  if (!adminAccess && existing.authorId !== req.user!.id) {
+    return res.status(403).json({ success: false, error: { message: 'Du darfst dieses Produkt nicht löschen.' } });
+  }
+  try {
+    const success = await productRepository.delete(req.params.id, adminAccess ? undefined : req.user!.id);
+    if (!success) return res.status(404).json({ success: false, error: { message: 'Produkt nicht gefunden.' } });
+    await logAudit('DELETE_PRODUCT', `Produkt gelöscht: ${req.params.id}`, req);
+    return res.json({ success: true, message: 'Produkt gelöscht' });
+  } catch (error) {
+    return sendProductWriteError(res, error);
+  }
 });
 
 // Claim free product (Price === 0)
 apiRouter.post('/products/:id/claim-free', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   const product = await productRepository.findById(req.params.id);
-  if (!product) {
+  if (!product || product.status !== 'PUBLISHED' || product.visibility !== 'PUBLIC') {
     return res.status(404).json({ success: false, error: { message: 'Produkt nicht gefunden' } });
   }
   if (product.price > 0) {
     return res.status(400).json({ success: false, error: { message: 'Dieses Produkt ist nicht kostenlos' } });
+  }
+  if (!product.downloadMediaId) {
+    return res.status(409).json({ success: false, error: { message: 'Für dieses Produkt ist keine Download-Datei hinterlegt.' } });
   }
 
   const orderId = `ord-free-${Date.now()}`;
@@ -466,7 +788,7 @@ apiRouter.post('/products/:id/claim-free', requireAuth, async (req: Authenticate
     totalAmount: 0,
     currency: product.currency || 'EUR',
     status: 'COMPLETED',
-    paymentStatus: 'PAID',
+    paymentStatus: 'NOT_REQUIRED',
     downloadToken: `dl-free-${Date.now()}`,
     createdAt: new Date().toISOString(),
   };
@@ -491,16 +813,41 @@ apiRouter.post('/products/:id/claim-free', requireAuth, async (req: Authenticate
 
 // Product versions
 apiRouter.get('/products/:id/versions', async (req: Request, res: Response) => {
-  const versions = db.productVersions.filter((v) => v.productId === req.params.id);
-  res.json({ success: true, data: versions });
+  try {
+    const product = await productRepository.findById(req.params.id);
+    if (!product || product.status !== 'PUBLISHED' || product.visibility !== 'PUBLIC') {
+      return res.status(404).json({ success: false, error: { message: 'Produkt nicht gefunden.' } });
+    }
+    const versions = await executeQuery<any>(
+      `SELECT id, product_id AS productId, version, release_notes AS releaseNotes, media_id AS mediaId, created_at AS createdAt
+       FROM product_versions WHERE product_id = ? ORDER BY created_at DESC`,
+      [req.params.id]
+    );
+    return res.json({ success: true, data: versions });
+  } catch (error) {
+    console.error('Product versions query failed:', error);
+    return res.status(getLastDatabaseStatus().connected ? 500 : 503).json({ success: false, error: { message: 'Versionen konnten nicht geladen werden.' } });
+  }
 });
 
 apiRouter.post('/products/:id/versions', requireRole('CREATOR', 'ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
   const { version, releaseNotes, mediaId } = req.body;
-  if (!version) {
+  if (typeof version !== 'string' || !/^[0-9A-Za-z.+-]{1,50}$/.test(version) || (releaseNotes !== undefined && (typeof releaseNotes !== 'string' || releaseNotes.length > 10000))) {
     return res.status(400).json({ success: false, error: { message: 'Versionsnummer erforderlich' } });
   }
-  const id = `ver-${Date.now()}`;
+  const product = await productRepository.findById(req.params.id);
+  if (!product) return res.status(404).json({ success: false, error: { message: 'Produkt nicht gefunden.' } });
+  const adminAccess = isAdmin(req.user);
+  if (!adminAccess && product.authorId !== req.user!.id) {
+    return res.status(403).json({ success: false, error: { message: 'Du darfst dieses Produkt nicht ändern.' } });
+  }
+  if (mediaId) {
+    const media = await mediaRepository.findById(mediaId);
+    if (!media || (!adminAccess && media.ownerId !== req.user!.id) || media.fileCategory === 'image') {
+      return res.status(403).json({ success: false, error: { message: 'Download-Datei nicht gefunden oder nicht im eigenen Besitz.' } });
+    }
+  }
+  const id = `ver-${randomUUID()}`;
   const newVer: ProductVersion = {
     id,
     productId: req.params.id,
@@ -509,113 +856,148 @@ apiRouter.post('/products/:id/versions', requireRole('CREATOR', 'ADMIN'), async 
     mediaId,
     createdAt: new Date().toISOString(),
   };
-  db.productVersions.unshift(newVer);
-  await productRepository.update(req.params.id, { version });
-  await logAudit('CREATE_PRODUCT_VERSION', `Version ${version} für Produkt ${req.params.id} veröffentlicht`, req);
-  res.status(201).json({ success: true, data: newVer });
+  try {
+    await withTransaction(async (connection) => {
+      await connection.execute(
+        `INSERT INTO product_versions (id, product_id, version, release_notes, media_id, created_at) VALUES (?, ?, ?, ?, ?, NOW())`,
+        [id, req.params.id, version, releaseNotes || '', mediaId || null]
+      );
+      await connection.execute(`UPDATE products SET version = ?, updated_at = NOW() WHERE id = ?`, [version, req.params.id]);
+    });
+    await logAudit('CREATE_PRODUCT_VERSION', `Version ${version} für Produkt ${req.params.id} veröffentlicht`, req);
+    return res.status(201).json({ success: true, data: newVer });
+  } catch (error) {
+    return sendProductWriteError(res, error);
+  }
 });
 
 // -------------------------------------------------------------
 // 5. CARTS & ORDERS (Sections 24, 25, 26, 41)
 // -------------------------------------------------------------
-apiRouter.get('/cart', (req: Request, res: Response) => {
-  const cartWithProducts = db.cart.map((item) => {
-    const product = db.products.find((p) => p.id === item.productId);
-    return {
-      id: item.productId,
-      productId: item.productId,
-      name: product?.name || 'Unbekanntes Produkt',
-      price: product?.price || 0,
-      quantity: item.quantity,
-      fileFormat: product?.fileFormat,
-    };
-  });
-  res.json({ success: true, data: cartWithProducts });
+const ensureUserCart = async (connection: import('mysql2/promise').PoolConnection, userId: string): Promise<string> => {
+  await connection.execute(`SELECT id FROM users WHERE id = ? FOR UPDATE`, [userId]);
+  const [rows] = await connection.execute<Array<import('mysql2').RowDataPacket & { id: string }>>(
+    `SELECT id FROM carts WHERE user_id = ? ORDER BY created_at ASC LIMIT 1 FOR UPDATE`,
+    [userId]
+  );
+  if (rows.length > 0) return rows[0].id;
+  const id = `cart-${randomUUID()}`;
+  await connection.execute(`INSERT INTO carts (id, user_id) VALUES (?, ?)`, [id, userId]);
+  return id;
+};
+
+const loadCart = async (userId: string) => {
+  const rows = await executeQuery<RowDataPacket & {
+    productId: string;
+    quantity: number;
+    name: string;
+    price: number;
+    currency: string;
+    fileFormat: string;
+  }>(
+    `SELECT ci.product_id AS productId, ci.quantity, p.name, p.price, p.currency, p.file_format AS fileFormat
+     FROM carts c
+     JOIN cart_items ci ON ci.cart_id = c.id
+     JOIN products p ON p.id = ci.product_id
+     WHERE c.user_id = ? AND p.status = 'PUBLISHED' AND p.visibility = 'PUBLIC'
+     ORDER BY ci.created_at ASC`,
+    [userId]
+  );
+  return rows.map((row) => ({
+    id: row.productId,
+    productId: row.productId,
+    quantity: Number(row.quantity),
+    name: row.name,
+    price: Number(row.price),
+    currency: row.currency,
+    fileFormat: row.fileFormat,
+  }));
+};
+
+apiRouter.get('/cart', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    if (!getLastDatabaseStatus().connected) throw new Error('DATABASE_UNAVAILABLE');
+    return res.json({ success: true, data: await loadCart(req.user!.id) });
+  } catch (error) {
+    console.error('Cart read failed:', error);
+    return res.status(503).json({ success: false, error: { message: 'Warenkorb konnte nicht aus MariaDB geladen werden.' } });
+  }
 });
 
-apiRouter.post('/cart', (req: Request, res: Response) => {
+apiRouter.post('/cart', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   const { productId, quantity = 1 } = req.body;
-  const product = db.products.find((p) => p.id === productId);
-  if (!product) {
-    return res.status(404).json({ success: false, error: { message: 'Produkt nicht gefunden' } });
+  if (typeof productId !== 'string' || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 99) {
+    return res.status(400).json({ success: false, error: { message: 'Produkt-ID oder Menge ist ungültig.' } });
   }
 
-  const existing = db.cart.find((c) => c.productId === productId);
-  if (existing) {
-    existing.quantity += quantity;
-  } else {
-    db.cart.push({ productId, quantity });
-  }
-
-  res.json({ success: true, data: db.cart });
-});
-
-apiRouter.delete('/cart/:productId', (req: Request, res: Response) => {
-  const { productId } = req.params;
-  const idx = db.cart.findIndex((c) => c.productId === productId);
-  if (idx !== -1) {
-    db.cart.splice(idx, 1);
-  }
-  res.json({ success: true, data: db.cart });
-});
-
-apiRouter.post('/cart/clear', (req: Request, res: Response) => {
-  db.cart.length = 0;
-  res.json({ success: true, message: 'Warenkorb geleert' });
-});
-
-apiRouter.post('/checkout', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
-  if (db.cart.length === 0) {
-    return res.status(400).json({ success: false, error: { message: 'Warenkorb ist leer' } });
-  }
-
-  const orderItems = db.cart
-    .map((item) => {
-      const p = db.products.find((prod) => prod.id === item.productId);
-      if (!p) return null;
-      return {
-        productId: p.id,
-        name: p.name,
-        price: p.price,
-        quantity: item.quantity,
-        fileFormat: p.fileFormat,
-      };
-    })
-    .filter(Boolean) as any[];
-
-  const total = orderItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
-
-  const order: Order = {
-    id: `ord-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-    userId: req.user!.id,
-    customerEmail: req.user!.email,
-    items: orderItems,
-    totalAmount: Number(total.toFixed(2)),
-    currency: 'EUR',
-    status: 'COMPLETED',
-    paymentStatus: 'PAID',
-    downloadToken: `dl-${Math.random().toString(36).substring(2, 15)}-${Date.now()}`,
-    createdAt: new Date().toISOString(),
-  };
-
-  const createdOrder = await orderRepository.create(order);
-  db.cart.length = 0; // Clear cart after successful checkout
-
-  // Create download entitlements for digital products
-  for (const item of orderItems) {
-    try {
-      await downloadRepository.createEntitlement(req.user!.id, item.productId, order.id);
-    } catch (e) {
-      console.warn('Could not create entitlement:', e);
+  try {
+    if (!getLastDatabaseStatus().connected) throw new Error('DATABASE_UNAVAILABLE');
+    await withTransaction(async (connection) => {
+      const cartId = await ensureUserCart(connection, req.user!.id);
+      const [products] = await connection.execute<Array<import('mysql2').RowDataPacket & { id: string }>>(
+        `SELECT id FROM products WHERE id = ? AND status = 'PUBLISHED' AND visibility = 'PUBLIC' FOR UPDATE`,
+        [productId]
+      );
+      if (products.length === 0) throw new Error('PRODUCT_NOT_AVAILABLE');
+      const [cartRows] = await connection.execute<Array<import('mysql2').RowDataPacket & { id: number; quantity: number }>>(
+        `SELECT id, quantity FROM cart_items WHERE cart_id = ? AND product_id = ? LIMIT 1 FOR UPDATE`,
+        [cartId, productId]
+      );
+      const existing = cartRows[0];
+      if (existing) {
+        const nextQuantity = Number(existing.quantity) + quantity;
+        if (nextQuantity > 99) throw new Error('QUANTITY_LIMIT');
+        await connection.execute(`UPDATE cart_items SET quantity = ? WHERE id = ?`, [nextQuantity, existing.id]);
+      } else {
+        await connection.execute(`INSERT INTO cart_items (cart_id, product_id, quantity) VALUES (?, ?, ?)`, [cartId, productId, quantity]);
+      }
+    });
+    return res.json({ success: true, data: await loadCart(req.user!.id) });
+  } catch (error) {
+    if (error instanceof Error && error.message === 'PRODUCT_NOT_AVAILABLE') {
+      return res.status(404).json({ success: false, error: { message: 'Veröffentlichtes Produkt nicht gefunden.' } });
     }
+    if (error instanceof Error && error.message === 'QUANTITY_LIMIT') {
+      return res.status(400).json({ success: false, error: { message: 'Maximal 99 Stück pro Produkt.' } });
+    }
+    console.error('Cart add failed:', error);
+    return res.status(503).json({ success: false, error: { message: 'Warenkorb konnte nicht in MariaDB aktualisiert werden.' } });
   }
+});
 
-  await logAudit('CHECKOUT_COMPLETED', `Bestellung ${order.id} über ${order.totalAmount} EUR abgeschlossen`, req);
+apiRouter.delete('/cart/:productId', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const { productId } = req.params;
+  try {
+    if (!getLastDatabaseStatus().connected) throw new Error('DATABASE_UNAVAILABLE');
+    await executeQuery(
+      `DELETE ci FROM cart_items ci JOIN carts c ON c.id = ci.cart_id WHERE c.user_id = ? AND ci.product_id = ?`,
+      [req.user!.id, productId]
+    );
+    return res.json({ success: true, data: await loadCart(req.user!.id) });
+  } catch (error) {
+    console.error('Cart remove failed:', error);
+    return res.status(503).json({ success: false, error: { message: 'Warenkorb konnte nicht aktualisiert werden.' } });
+  }
+});
 
-  res.json({
-    success: true,
-    data: createdOrder,
-    message: 'Bestellung erfolgreich abgeschlossen. Downloads freigeschaltet.',
+apiRouter.post('/cart/clear', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    if (!getLastDatabaseStatus().connected) throw new Error('DATABASE_UNAVAILABLE');
+    await executeQuery(
+      `DELETE ci FROM cart_items ci JOIN carts c ON c.id = ci.cart_id WHERE c.user_id = ?`,
+      [req.user!.id]
+    );
+    return res.json({ success: true, message: 'Warenkorb geleert' });
+  } catch (error) {
+    console.error('Cart clear failed:', error);
+    return res.status(503).json({ success: false, error: { message: 'Warenkorb konnte nicht geleert werden.' } });
+  }
+});
+
+apiRouter.post('/checkout', requireAuth, (_req: AuthenticatedRequest, res: Response) => {
+  return res.status(501).json({
+    success: false,
+    error: { message: 'Checkout ist deaktiviert, bis ein echter Payment-Provider eingerichtet ist.' },
   });
 });
 
@@ -654,81 +1036,170 @@ apiRouter.post('/downloads/token/:entitlementId', requireAuth, async (req: Authe
 
 // Server-side controlled, authorized file delivery with verified token (NO static URLs!)
 apiRouter.get('/downloads/file/:token', async (req: Request, res: Response) => {
-  const { token } = req.params;
-  const result = await downloadRepository.verifyAndConsumeToken(token);
-  if (!result.valid || !result.product) {
-    return res.status(403).json({ success: false, error: { message: result.error || 'Ungültiger Download-Token' } });
+  try {
+    const result = await downloadRepository.verifyAndConsumeToken(req.params.token);
+    if (!result.valid || !result.product || !result.entitlement) {
+      return res.status(403).json({ success: false, error: { message: result.error || 'Ungültiger Download-Token' } });
+    }
+    if (!result.product.downloadMediaId) {
+      return res.status(404).json({ success: false, error: { message: 'Für dieses Produkt ist keine Download-Datei hinterlegt.' } });
+    }
+    const media = await mediaRepository.findById(result.product.downloadMediaId);
+    if (!media?.storageKey) {
+      return res.status(404).json({ success: false, error: { message: 'Download-Datei nicht verfügbar.' } });
+    }
+
+    const safeTitle = result.product.name.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 100);
+    const extension = path.extname(media.originalName).toLowerCase().replace(/[^.a-z0-9]/g, '');
+    const safeFilename = `${safeTitle}_v${result.product.version || '1.0.0'}${extension}`;
+    const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+    await auditRepository.log('FILE_DOWNLOADED', result.entitlement.userId, 'Customer', `Download: ${safeFilename}`, ip);
+
+    res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    const stream = mediaStorage.createReadStream(media.storageKey);
+    stream.on('error', (error) => {
+      console.error('Protected download failed:', error);
+      if (!res.headersSent) res.status(404).json({ success: false, error: { message: 'Download-Datei nicht verfügbar.' } });
+      else res.destroy(error);
+    });
+    return stream.pipe(res);
+  } catch (error) {
+    console.error('Download authorization failed:', error);
+    return res.status(getLastDatabaseStatus().connected ? 500 : 503).json({ success: false, error: { message: 'Download konnte nicht autorisiert werden.' } });
   }
-
-  const product = result.product;
-  const safeFilename = `${product.name.replace(/[^a-zA-Z0-9_\-]/g, '_')}_v${product.version || '1.0.0'}.${(product.fileFormat || 'zip').toLowerCase()}`;
-
-  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
-  await auditRepository.log('FILE_DOWNLOADED', result.entitlement?.userId || 'unknown', 'Customer', `Download: ${safeFilename}`, ip);
-
-  res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
-  res.setHeader('Content-Type', 'application/octet-stream');
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
-
-  const payload = Buffer.from(
-    `===============================================================================\n` +
-    `NEXUS CODE PLAY — OFFICIAL DIGITAL ASSET DISTRIBUTION\n` +
-    `Product: ${product.name}\n` +
-    `Version: ${product.version || '1.0.0'}\n` +
-    `Category: ${product.category}\n` +
-    `Format: ${product.fileFormat}\n` +
-    `License: ${product.license}\n` +
-    `Target: HP EliteDesk 800 G3 Mini (MariaDB 11 / CasaOS / Docker)\n` +
-    `Entitlement ID: ${result.entitlement?.id}\n` +
-    `Issued At: ${new Date().toISOString()}\n` +
-    `===============================================================================\n\n` +
-    `[DESCRIPTION]\n${product.description}\n\n` +
-    `[DOCUMENTATION]\n${product.documentationUrl || 'https://nexus.local/docs'}\n\n` +
-    `[TOKEN AUTHORIZATION]\nServer-verified token: ${token.substring(0, 10)}... [OK]\n`
-  );
-
-  res.send(payload);
 });
 
 // -------------------------------------------------------------
 // 5.2 MEDIA MANAGEMENT API (Sections 19, 21)
 // -------------------------------------------------------------
-apiRouter.get('/media', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
-  const isAll = req.user?.role === 'ADMIN' && req.query.all === 'true';
-  const ownerId = isAll ? undefined : req.user!.id;
-  const category = req.query.category ? String(req.query.category) : undefined;
-  const list = await mediaRepository.findAll({ ownerId, fileCategory: category });
-  res.json({ success: true, data: list });
+apiRouter.get('/media', requireRole('CREATOR', 'ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const isAll = isAdmin(req.user) && req.query.all === 'true';
+    const ownerId = isAll ? undefined : req.user!.id;
+    const category = req.query.category ? String(req.query.category) : undefined;
+    const list = await mediaRepository.findAll({ ownerId, fileCategory: category });
+    return res.json({ success: true, data: list.map(({ storageKey: _storageKey, ...media }) => media) });
+  } catch (error) {
+    console.error('Media list query failed:', error);
+    return res.status(getLastDatabaseStatus().connected ? 500 : 503).json({ success: false, error: { message: 'Medien konnten nicht aus MariaDB geladen werden.' } });
+  }
 });
 
-apiRouter.post('/media', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
-  const { filename, originalName, storagePath, mimeType, fileSize, fileCategory } = req.body;
-  if (!filename) {
-    return res.status(400).json({ success: false, error: { message: 'Dateiname erforderlich' } });
+apiRouter.post(
+  '/media/upload',
+  requireRole('CREATOR', 'ADMIN'),
+  (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    mediaStorage.upload.single('file')(req, res, (error) => {
+      if (error) {
+        const status = error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+        return res.status(status).json({ success: false, error: { message: 'Datei fehlt, ist zu groß oder hat einen nicht unterstützten Typ.' } });
+      }
+      next();
+    });
+  },
+  async (req: AuthenticatedRequest, res: Response) => {
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ success: false, error: { message: 'Eine Datei ist erforderlich.' } });
+    }
+    const fileCategory = getUploadCategory(file.originalname, file.mimetype);
+    const maxBytes = fileCategory === 'image' ? 15 * 1024 * 1024 : 100 * 1024 * 1024;
+    if (!fileCategory || file.size > maxBytes) {
+      await mediaStorage.remove(file.filename).catch((error) => console.error('Rejected upload cleanup failed:', error));
+      return res.status(file.size > maxBytes ? 413 : 400).json({ success: false, error: { message: 'Dateityp oder Dateigröße ist nicht erlaubt.' } });
+    }
+    const validSignature = await mediaStorage.verifyFile(file.path, file.originalname).catch((error) => {
+      console.error('Upload signature check failed:', error);
+      return false;
+    });
+    if (!validSignature) {
+      await mediaStorage.remove(file.filename).catch((error) => console.error('Invalid upload cleanup failed:', error));
+      return res.status(415).json({ success: false, error: { message: 'Der Dateiinhalt passt nicht zur angegebenen Endung.' } });
+    }
+
+    const id = `med-${randomUUID()}`;
+    try {
+      const media = await mediaRepository.create({
+        id,
+        ownerId: req.user!.id,
+        filename: file.originalname,
+        originalName: file.originalname,
+        storageKey: file.filename,
+        mimeType: file.mimetype,
+        fileSize: file.size,
+        fileCategory,
+      });
+      await logAudit('UPLOAD_MEDIA', `Medienobjekt gespeichert: ${file.originalname}`, req);
+      const { storageKey: _storageKey, ...responseMedia } = media;
+      return res.status(201).json({ success: true, data: responseMedia });
+    } catch (error) {
+      await mediaStorage.remove(file.filename).catch((cleanupError) => console.error('Failed to remove unregistered upload:', cleanupError));
+      console.error('Media upload failed:', error);
+      return res.status(getLastDatabaseStatus().connected ? 500 : 503).json({ success: false, error: { message: 'Datei konnte nicht dauerhaft registriert werden.' } });
+    }
   }
-  const id = `med-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-  const media = await mediaRepository.create({
-    id,
-    ownerId: req.user!.id,
-    filename,
-    originalName: originalName || filename,
-    storagePath: storagePath || `/uploads/${filename}`,
-    mimeType: mimeType || 'application/octet-stream',
-    fileSize: fileSize || 1024,
-    fileCategory: fileCategory || 'file',
+);
+
+apiRouter.get('/media/:id/file', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const media = await mediaRepository.findById(req.params.id);
+    if (!media || !media.storageKey) {
+      return res.status(404).json({ success: false, error: { message: 'Datei nicht gefunden.' } });
+    }
+    const ownerAccess = req.user?.id === media.ownerId || isAdmin(req.user);
+    const publicImage = media.fileCategory === 'image' && await mediaRepository.isPubliclyLinked(media.id);
+    if (!ownerAccess && !publicImage) {
+      return res.status(403).json({ success: false, error: { message: 'Kein Zugriff auf diese Datei.' } });
+    }
+
+    res.setHeader('Content-Type', media.mimeType);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Disposition', `inline; filename="${media.originalName.replace(/["\\\r\n]/g, '_')}"`);
+    res.setHeader('Cache-Control', publicImage ? 'public, max-age=300' : 'private, no-store');
+    const stream = mediaStorage.createReadStream(media.storageKey);
+    stream.on('error', (error) => {
+      console.error('Media file read failed:', error);
+      if (!res.headersSent) res.status(404).json({ success: false, error: { message: 'Datei nicht verfügbar.' } });
+      else res.destroy(error);
+    });
+    return stream.pipe(res);
+  } catch (error) {
+    console.error('Media file request failed:', error);
+    return res.status(getLastDatabaseStatus().connected ? 500 : 503).json({ success: false, error: { message: 'Datei konnte nicht geladen werden.' } });
+  }
+});
+
+apiRouter.post('/media', requireAuth, (_req: AuthenticatedRequest, res: Response) => {
+  res.status(410).json({
+    success: false,
+    error: { message: 'Metadaten-Uploads sind deaktiviert. Verwende den Multipart-Dateiupload.' },
   });
-  await logAudit('UPLOAD_MEDIA', `Medienobjekt hinzugefügt: ${filename}`, req);
-  res.status(201).json({ success: true, data: media });
 });
 
 apiRouter.delete('/media/:id', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
-  const authorCheck = req.user?.role === 'ADMIN' ? undefined : req.user?.id;
-  const success = await mediaRepository.delete(req.params.id, authorCheck);
-  if (!success) {
-    return res.status(404).json({ success: false, error: { message: 'Datei nicht gefunden oder keine Berechtigung' } });
+  const adminAccess = isAdmin(req.user);
+  const media = await mediaRepository.findById(req.params.id);
+  if (!media) return res.status(404).json({ success: false, error: { message: 'Datei nicht gefunden.' } });
+  if (!adminAccess && media.ownerId !== req.user!.id) {
+    return res.status(403).json({ success: false, error: { message: 'Du darfst diese Datei nicht löschen.' } });
+  }
+  try {
+    const success = await mediaRepository.delete(req.params.id, adminAccess ? undefined : req.user!.id);
+    if (!success) return res.status(404).json({ success: false, error: { message: 'Datei nicht gefunden.' } });
+    if (media.storageKey) await mediaStorage.remove(media.storageKey);
+  } catch (error) {
+    const code = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : '';
+    if (code === 'MEDIA_REFERENCED' || code === 'ER_ROW_IS_REFERENCED_2' || code === 'ER_ROW_IS_REFERENCED') {
+      return res.status(409).json({ success: false, error: { message: 'Datei wird noch von einem Projekt oder Produkt verwendet.' } });
+    }
+    console.error('Media delete failed:', error);
+    return res.status(getLastDatabaseStatus().connected ? 500 : 503).json({ success: false, error: { message: 'Datei konnte nicht gelöscht werden.' } });
   }
   await logAudit('DELETE_MEDIA', `Medienobjekt gelöscht: ${req.params.id}`, req);
-  res.json({ success: true, message: 'Datei gelöscht' });
+  return res.json({ success: true, message: 'Datei gelöscht' });
 });
 
 // -------------------------------------------------------------
@@ -741,7 +1212,7 @@ apiRouter.get('/cms/stats', requireAuth, async (req: AuthenticatedRequest, res: 
   }
 
   const userId = req.user!.id;
-  const filterByAuthor = req.user?.role === 'ADMIN' ? undefined : userId;
+  const filterByAuthor = isAdmin(req.user) ? undefined : userId;
 
   const [projResult, prodResult, posts] = await Promise.all([
     projectRepository.findAll({ authorId: filterByAuthor, includeDrafts: true, limit: 100 }),
@@ -858,37 +1329,48 @@ apiRouter.delete(
 // -------------------------------------------------------------
 // 7. PERSISTENT AI CONVERSATIONS & HISTORY (Sections 28, 29)
 // -------------------------------------------------------------
-apiRouter.get('/ai/conversations', async (req: AuthenticatedRequest, res: Response) => {
-  const userId = req.user?.id || 'usr-admin-feligor';
-  const convs = await aiConversationRepository.getConversations(userId);
-  res.json({ success: true, data: convs });
+apiRouter.get('/ai/conversations', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const convs = await aiConversationRepository.getConversations(req.user!.id);
+  return res.json({ success: true, data: convs });
 });
 
-apiRouter.post('/ai/conversations', async (req: AuthenticatedRequest, res: Response) => {
+apiRouter.post('/ai/conversations', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   const { title, role } = req.body;
-  const userId = req.user?.id || 'usr-admin-feligor';
   const conv = await aiConversationRepository.createConversation(
-    userId,
-    title || 'Neues Gespräch',
-    role || 'general'
+    req.user!.id,
+    typeof title === 'string' && title.trim() ? title.trim().slice(0, 200) : 'Neues Gespräch',
+    typeof role === 'string' ? role.slice(0, 50) : 'general'
   );
-  res.json({ success: true, data: conv });
+  return res.status(201).json({ success: true, data: conv });
 });
 
-apiRouter.get('/ai/conversations/:id/messages', async (req: Request, res: Response) => {
+apiRouter.get('/ai/conversations/:id/messages', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  const conversations = await executeQuery<any>(`SELECT user_id FROM ai_conversations WHERE id = ? LIMIT 1`, [req.params.id]);
+  if (!conversations.length) return res.status(404).json({ success: false, error: { message: 'Konversation nicht gefunden.' } });
+  if (conversations[0].user_id !== req.user!.id && !isAdmin(req.user)) {
+    return res.status(403).json({ success: false, error: { message: 'Kein Zugriff auf diese Konversation.' } });
+  }
   const messages = await aiConversationRepository.getMessages(req.params.id);
-  res.json({ success: true, data: messages });
+  return res.json({ success: true, data: messages });
 });
 
-apiRouter.post('/ai/conversations/:id/messages', async (req: Request, res: Response) => {
+apiRouter.post('/ai/conversations/:id/messages', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   const { role, content, model } = req.body;
+  const conversations = await executeQuery<any>(`SELECT user_id FROM ai_conversations WHERE id = ? LIMIT 1`, [req.params.id]);
+  if (!conversations.length) return res.status(404).json({ success: false, error: { message: 'Konversation nicht gefunden.' } });
+  if (conversations[0].user_id !== req.user!.id && !isAdmin(req.user)) {
+    return res.status(403).json({ success: false, error: { message: 'Kein Zugriff auf diese Konversation.' } });
+  }
+  if (role !== 'user' || typeof content !== 'string' || !content.trim() || content.length > 50000) {
+    return res.status(400).json({ success: false, error: { message: 'Ungültige Nachricht.' } });
+  }
   const message = await aiConversationRepository.addMessage(
     req.params.id,
-    role || 'user',
-    content || '',
-    model || 'gemini-3.5-flash'
+    'user',
+    content.trim(),
+    typeof model === 'string' ? model.slice(0, 100) : 'gemini-3.5-flash'
   );
-  res.json({ success: true, data: message });
+  return res.status(201).json({ success: true, data: message });
 });
 
 // -------------------------------------------------------------
@@ -927,33 +1409,41 @@ apiRouter.get('/tutorials', (req: Request, res: Response) => {
 // 9. ADMIN & INFRASTRUCTURE GOVERNANCE (Sections 11, 50, 51)
 // -------------------------------------------------------------
 apiRouter.get('/admin/stats', requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
-  const dbHealth = await databaseHealthService.checkHealth();
-  const allUsers = await userRepository.getAllUsers();
-  const orders = db.orders;
-  const revenue = orders.reduce((sum, o) => sum + o.totalAmount, 0);
-
-  res.json({
-    success: true,
-    data: {
-      totalUsers: allUsers.length,
-      totalProjects: db.projects.length,
-      totalProducts: db.products.length,
-      totalOrders: orders.length,
-      totalRevenue: Number(revenue.toFixed(2)),
-      totalPosts: db.posts.length,
-      database: {
-        connected: dbHealth.database.connected,
-        type: dbHealth.database.type,
-        latencyMs: dbHealth.database.latencyMs,
+  try {
+    const [dbHealth, userCount, projectCount, productCount, orderStats, postCount] = await Promise.all([
+      databaseHealthService.checkHealth(),
+      executeQuery<any>(`SELECT COUNT(*) AS total FROM users`),
+      executeQuery<any>(`SELECT COUNT(*) AS total FROM projects`),
+      executeQuery<any>(`SELECT COUNT(*) AS total FROM products`),
+      executeQuery<any>(`SELECT COUNT(*) AS total, COALESCE(SUM(total_amount), 0) AS revenue FROM orders`),
+      executeQuery<any>(`SELECT COUNT(*) AS total FROM posts`),
+    ]);
+    return res.json({
+      success: true,
+      data: {
+        totalUsers: Number(userCount[0]?.total || 0),
+        totalProjects: Number(projectCount[0]?.total || 0),
+        totalProducts: Number(productCount[0]?.total || 0),
+        totalOrders: Number(orderStats[0]?.total || 0),
+        totalRevenue: Number(orderStats[0]?.revenue || 0),
+        totalPosts: Number(postCount[0]?.total || 0),
+        database: {
+          connected: dbHealth.database.connected,
+          type: dbHealth.database.type,
+          latencyMs: dbHealth.database.latencyMs,
+        },
+        infrastructure: {
+          server: 'HP EliteDesk 800 G3 Mini',
+          dockerContainers: 0,
+          tailscale: 'UNKNOWN',
+          nginxProxyManager: 'UNKNOWN',
+        },
       },
-      infrastructure: {
-        server: 'HP EliteDesk 800 G3 Mini',
-        dockerContainers: 6,
-        tailscale: 'CONNECTED',
-        nginxProxyManager: 'ACTIVE',
-      },
-    },
-  });
+    });
+  } catch (error) {
+    console.error('Admin statistics query failed:', error);
+    return res.status(getLastDatabaseStatus().connected ? 500 : 503).json({ success: false, error: { message: 'Admin-Statistiken konnten nicht aus MariaDB geladen werden.' } });
+  }
 });
 
 apiRouter.get('/admin/users', requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
@@ -978,16 +1468,28 @@ apiRouter.get('/admin/audit-logs', requireRole('ADMIN'), async (req: Authenticat
   res.json({ success: true, data: logs });
 });
 
-apiRouter.get('/notifications', requireAuth, (req: AuthenticatedRequest, res: Response) => {
-  const list = db.notifications.filter((n) => n.userId === req.user!.id);
-  res.json({ success: true, data: list });
+apiRouter.get('/notifications', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const rows = await executeQuery<any>(
+      `SELECT id, user_id AS userId, title, message, read_status AS read, notification_type AS type, created_at AS createdAt
+       FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50`,
+      [req.user!.id]
+    );
+    return res.json({ success: true, data: rows });
+  } catch (error) {
+    console.error('Notification query failed:', error);
+    return res.status(getLastDatabaseStatus().connected ? 500 : 503).json({ success: false, error: { message: 'Benachrichtigungen konnten nicht geladen werden.' } });
+  }
 });
 
-apiRouter.post('/notifications/read-all', requireAuth, (req: AuthenticatedRequest, res: Response) => {
-  db.notifications.forEach((n) => {
-    if (n.userId === req.user!.id) n.read = true;
-  });
-  res.json({ success: true });
+apiRouter.post('/notifications/read-all', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    await executeQuery(`UPDATE notifications SET read_status = 1 WHERE user_id = ?`, [req.user!.id]);
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('Notification update failed:', error);
+    return res.status(getLastDatabaseStatus().connected ? 500 : 503).json({ success: false, error: { message: 'Benachrichtigungen konnten nicht aktualisiert werden.' } });
+  }
 });
 
 // -------------------------------------------------------------

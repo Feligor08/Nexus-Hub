@@ -279,7 +279,9 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
                     <span aria-hidden="true">·</span>
                     <span>{new Date(ord.createdAt).toLocaleDateString('de-DE')}</span>
                     <span aria-hidden="true">·</span>
-                    <span className="text-emerald-400 font-semibold">Bezahlt</span>
+                    <span className="text-emerald-400 font-semibold">
+                      {ord.paymentStatus === 'NOT_REQUIRED' ? 'Kostenlos' : ord.paymentStatus === 'PAID' ? 'Bezahlt' : 'Zahlung offen'}
+                    </span>
                   </div>
 
                   <div className="text-xs text-zinc-200">

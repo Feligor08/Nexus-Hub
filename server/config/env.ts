@@ -1,10 +1,12 @@
 import dotenv from 'dotenv';
+import path from 'path';
 
 dotenv.config();
 
 export const config = {
   env: process.env.APP_ENV || process.env.NODE_ENV || 'development',
   port: Number(process.env.PORT) || 3000,
+  mediaStoragePath: path.resolve(process.env.MEDIA_STORAGE_PATH || 'var/media'),
   db: {
     host: process.env.DB_HOST || '127.0.0.1',
     port: Number(process.env.DB_PORT) || 3306,

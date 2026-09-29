@@ -28,7 +28,9 @@ export interface Project {
   category: 'Software' | 'DevOps' | 'GameServer' | 'AI & Automation' | 'Maker' | 'ITA Curriculum' | string;
   techStack: string[];
   coverImage?: string;
+  coverMediaId?: string;
   galleryImages: string[];
+  galleryMediaIds?: string[];
   githubUrl?: string;
   liveUrl?: string;
   demoUrl?: string;
@@ -38,6 +40,8 @@ export interface Project {
   visibility?: 'PUBLIC' | 'PRIVATE';
   problem?: string;
   solution?: string;
+  goal?: string;
+  result?: string;
   architecture?: string;
   caseStudyProblem?: string;
   caseStudySolution?: string;
@@ -73,6 +77,15 @@ export interface Product {
   visibility?: 'PUBLIC' | 'PRIVATE';
   publishedAt?: string;
   mediaFileId?: string;
+  coverMediaId?: string;
+  galleryMediaIds?: string[];
+  downloadMediaId?: string;
+  tags?: string[];
+  features?: string[];
+  requirements?: string[];
+  changelog?: string;
+  metaTitle?: string;
+  metaDescription?: string;
   demoFileUrl?: string;
   documentationUrl?: string;
   rating?: number;
@@ -107,7 +120,7 @@ export interface Order {
   totalAmount: number;
   currency: string;
   status: 'COMPLETED' | 'PENDING' | 'CANCELLED';
-  paymentStatus: 'PAID' | 'PENDING' | 'FAILED';
+  paymentStatus: 'PAID' | 'PENDING' | 'FAILED' | 'NOT_REQUIRED';
   downloadToken: string;
   createdAt: string;
 }
@@ -215,6 +228,7 @@ export interface MediaFile {
   filename: string;
   originalName: string;
   storagePath: string;
+  storageKey?: string;
   mimeType: string;
   fileSize: number;
   fileCategory: 'image' | 'file' | 'document' | '3d';

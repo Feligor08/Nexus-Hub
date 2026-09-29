@@ -32,24 +32,44 @@ export const StorePage: React.FC<StorePageProps> = ({
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [activeProduct, setActiveProduct] = useState<Product | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [claimStatus, setClaimStatus] = useState<string | null>(null);
   const { addToCart, setIsCartOpen } = useCart();
   const { isAuthenticated, openAuthModal } = useAuth();
 
   useEffect(() => {
+    let isCurrent = true;
     setIsLoading(true);
-    api.getProducts()
-      .then((data) => {
-        setProducts(data);
+    setLoadError(null);
+    const loadProducts = async () => {
+      try {
+        const data = await api.getProducts();
+        let selectedProduct: Product | null = null;
         if (selectedSlug) {
-          const found = data.find((p) => p.slug === selectedSlug);
-          if (found) setActiveProduct(found);
-        } else {
-          setActiveProduct(null);
+          try {
+            selectedProduct = await api.getProductBySlug(selectedSlug);
+          } catch {
+            setLoadError('Dieses Produkt ist nicht verfügbar oder wurde nicht veröffentlicht.');
+          }
         }
-      })
-      .catch(console.error)
-      .finally(() => setIsLoading(false));
+        if (!isCurrent) return;
+        setProducts(data);
+        setActiveProduct(selectedProduct);
+      } catch (error) {
+        if (isCurrent) {
+          console.error(error);
+          setProducts([]);
+          setActiveProduct(null);
+          setLoadError('Der Store konnte nicht aus MariaDB geladen werden.');
+        }
+      } finally {
+        if (isCurrent) setIsLoading(false);
+      }
+    };
+    void loadProducts();
+    return () => {
+      isCurrent = false;
+    };
   }, [selectedSlug]);
 
   const handleClaimFree = async (product: Product) => {
@@ -124,7 +144,30 @@ export const StorePage: React.FC<StorePageProps> = ({
 
               <h1 className="text-2xl sm:text-3xl font-extrabold text-white">{activeProduct.name}</h1>
               <p className="text-sm text-zinc-300 leading-relaxed">{activeProduct.description}</p>
+              {activeProduct.images[0] && (
+                <img src={activeProduct.images[0]} alt={activeProduct.name} className="w-full max-h-[28rem] rounded-lg object-cover border border-white/10" />
+              )}
+              {activeProduct.tags?.length ? <div className="flex flex-wrap gap-2">{activeProduct.tags.map((tag) => <span key={tag} className="px-2 py-1 bg-white/5 border border-white/10 rounded text-2xs text-zinc-300">{tag}</span>)}</div> : null}
             </div>
+
+            {!!activeProduct.features?.length && (
+              <div className="p-6 liquid-glass rounded-xl border border-white/10 space-y-2">
+                <h2 className="text-sm font-bold text-white">Features</h2>
+                <ul className="list-disc pl-5 text-xs text-zinc-300 space-y-1">{activeProduct.features.map((feature) => <li key={feature}>{feature}</li>)}</ul>
+              </div>
+            )}
+            {!!activeProduct.requirements?.length && (
+              <div className="p-6 liquid-glass rounded-xl border border-white/10 space-y-2">
+                <h2 className="text-sm font-bold text-white">Voraussetzungen</h2>
+                <ul className="list-disc pl-5 text-xs text-zinc-300 space-y-1">{activeProduct.requirements.map((requirement) => <li key={requirement}>{requirement}</li>)}</ul>
+              </div>
+            )}
+            {activeProduct.changelog && (
+              <div className="p-6 liquid-glass rounded-xl border border-white/10 space-y-2">
+                <h2 className="text-sm font-bold text-white">Änderungen</h2>
+                <p className="text-xs text-zinc-300 whitespace-pre-wrap">{activeProduct.changelog}</p>
+              </div>
+            )}
 
             {/* Technical Specs */}
             <div className="p-6 liquid-glass rounded-xl border border-white/10 space-y-4">
@@ -163,7 +206,7 @@ export const StorePage: React.FC<StorePageProps> = ({
               <div>
                 <span className="text-2xs text-zinc-400 block">Kaufpreis</span>
                 <span className="font-mono text-3xl font-extrabold text-white">
-                  {activeProduct.price === 0 ? 'Kostenlos' : `${activeProduct.price.toFixed(2)} €`}
+                  {activeProduct.price === 0 ? 'Kostenlos' : `${activeProduct.price.toFixed(2)} ${activeProduct.currency}`}
                 </span>
               </div>
 
@@ -269,6 +312,8 @@ export const StorePage: React.FC<StorePageProps> = ({
       {/* Products Grid */}
       {isLoading ? (
         <div className="py-16 text-center text-xs text-zinc-500">Lade Store-Produkte...</div>
+      ) : loadError ? (
+        <div role="alert" className="py-16 text-center text-xs text-zinc-300">{loadError}</div>
       ) : filtered.length === 0 ? (
         <div className="py-20 text-center text-zinc-500 liquid-glass rounded-2xl border border-white/10 space-y-3">
           <ShoppingBag className="w-12 h-12 mx-auto text-zinc-600 stroke-[1.5]" />
@@ -314,7 +359,7 @@ export const StorePage: React.FC<StorePageProps> = ({
                     {prod.price === 0 ? (
                       <span className="text-emerald-400 font-bold">Kostenlos</span>
                     ) : (
-                      `${prod.price.toFixed(2)} €`
+                      `${prod.price.toFixed(2)} ${prod.currency}`
                     )}
                   </span>
                 </div>

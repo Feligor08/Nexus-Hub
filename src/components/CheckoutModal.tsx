@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { useCart } from '../context/CartContext';
-import { api } from '../services/api';
 import { Order } from '../types/platform';
 import { X, CheckCircle, Download, CreditCard, ShieldCheck, ArrowRight, Loader2 } from 'lucide-react';
 
@@ -15,7 +14,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   onClose,
   onOrderCompleted,
 }) => {
-  const { items, totalAmount, clearCart } = useCart();
+  const { items, totalAmount } = useCart();
   const [isProcessing, setIsProcessing] = useState(false);
   const [completedOrder, setCompletedOrder] = useState<Order | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -29,18 +28,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   };
 
   const handleExecutePayment = async () => {
-    setIsProcessing(true);
-    setError(null);
-    try {
-      const order = await api.checkout();
-      setCompletedOrder(order);
-      await clearCart();
-      if (onOrderCompleted) onOrderCompleted(order);
-    } catch (e: any) {
-      setError(e.message || 'Zahlungsabwicklung fehlgeschlagen');
-    } finally {
-      setIsProcessing(false);
-    }
+    setError('Es ist kein Payment-Provider konfiguriert. Es wurde keine Bestellung erstellt.');
   };
 
   return (
@@ -142,10 +130,10 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             <div className="p-3.5 liquid-glass rounded-lg border border-white/10 text-xs space-y-1.5">
               <div className="flex items-center gap-2 text-zinc-300 font-semibold">
                 <ShieldCheck className="w-4 h-4 text-white" />
-                <span>Entwickler-Testumgebung (Stripe / SEPA Simuliert)</span>
+                <span>Keine Zahlungsabwicklung verfügbar</span>
               </div>
               <p className="text-2xs text-zinc-400 leading-relaxed">
-                Der Betrag wird über die Server-Schnittstelle autorisiert. Nach Klick auf &quot;Zahlungspflichtig bestellen&quot; werden sofort die digitalen Download-Tokens generiert.
+                Ein Zahlungsanbieter ist nicht konfiguriert. Es werden weder Bestellungen noch Download-Berechtigungen simuliert.
               </p>
             </div>
 
@@ -162,20 +150,10 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
               <button
                 type="button"
                 onClick={handleExecutePayment}
-                disabled={isProcessing || items.length === 0}
+                disabled
                 className="px-5 py-2.5 bg-white hover:bg-zinc-200 disabled:bg-zinc-800 disabled:text-zinc-600 text-black font-bold text-xs rounded-lg transition-colors flex items-center gap-2 cursor-pointer"
               >
-                {isProcessing ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Verarbeite Transaktion...</span>
-                  </>
-                ) : (
-                  <>
-                    <span>Zahlungspflichtig bestellen ({totalAmount.toFixed(2)} €)</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </>
-                )}
+                <span>Zahlung derzeit nicht verfügbar</span>
               </button>
             </div>
           </div>

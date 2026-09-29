@@ -9,9 +9,15 @@ const __dirname = path.dirname(__filename);
 export interface MigrationResult {
   success: boolean;
   applied: string[];
+  deferred: string[];
   message: string;
   error?: string;
 }
+
+const deferredLegacyMigrations = new Set([
+  '002_seed_initial_data.sql',
+  '004_remove_demo_data.sql',
+]);
 
 /**
  * Executes database migrations in sequence
@@ -22,6 +28,7 @@ export async function runMigrations(): Promise<MigrationResult> {
     return {
       success: false,
       applied: [],
+      deferred: [],
       message: 'MariaDB is not reachable. Migrations deferred until connection is active.',
       error: dbHealth.error,
     };
@@ -29,6 +36,7 @@ export async function runMigrations(): Promise<MigrationResult> {
 
   const pool = getDbPool();
   const appliedMigrations: string[] = [];
+  const deferredMigrations: string[] = [];
 
   try {
     // Ensure migrations tracking table exists
@@ -51,6 +59,10 @@ export async function runMigrations(): Promise<MigrationResult> {
       .sort();
 
     for (const file of files) {
+      if (!executed.has(file) && deferredLegacyMigrations.has(file)) {
+        deferredMigrations.push(file);
+        continue;
+      }
       if (!executed.has(file)) {
         const filePath = path.join(__dirname, file);
         const sqlContent = fs.readFileSync(filePath, 'utf-8');
@@ -86,15 +98,17 @@ export async function runMigrations(): Promise<MigrationResult> {
     return {
       success: true,
       applied: appliedMigrations,
-      message:
-        appliedMigrations.length > 0
-          ? `Successfully applied ${appliedMigrations.length} migration(s).`
-          : 'Database schema is up to date.',
+      deferred: deferredMigrations,
+      message: [
+        appliedMigrations.length > 0 ? `Successfully applied ${appliedMigrations.length} migration(s).` : 'Database schema is up to date.',
+        deferredMigrations.length > 0 ? `Deferred legacy migrations pending explicit review: ${deferredMigrations.join(', ')}.` : '',
+      ].filter(Boolean).join(' '),
     };
   } catch (err: any) {
     return {
       success: false,
       applied: appliedMigrations,
+      deferred: deferredMigrations,
       message: 'Migration execution error',
       error: err.message,
     };

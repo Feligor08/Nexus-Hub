@@ -36,10 +36,7 @@ export const MediaManagerModal: React.FC<MediaManagerModalProps> = ({
 
   // Upload Form State
   const [isUploading, setIsUploading] = useState(false);
-  const [uploadFilename, setUploadFilename] = useState('');
-  const [uploadPath, setUploadPath] = useState('');
-  const [uploadCategory, setUploadCategory] = useState<'image' | 'file' | 'document' | '3d'>('image');
-  const [uploadSizeKb, setUploadSizeKb] = useState(250);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const fetchMedia = () => {
@@ -76,24 +73,20 @@ export const MediaManagerModal: React.FC<MediaManagerModalProps> = ({
 
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!uploadFilename.trim()) return;
+    if (!uploadFile) {
+      setErrorMsg('Wähle zuerst eine Datei aus.');
+      return;
+    }
 
     try {
-      const created = await api.uploadMedia({
-        filename: uploadFilename.trim(),
-        originalName: uploadFilename.trim(),
-        storagePath: uploadPath.trim() || `/assets/media/${uploadFilename.trim()}`,
-        mimeType: uploadCategory === 'image' ? 'image/jpeg' : 'application/octet-stream',
-        fileSize: uploadSizeKb * 1024,
-        fileCategory: uploadCategory,
-      });
+      setErrorMsg(null);
+      const created = await api.uploadMedia(uploadFile);
 
       setMediaList([created, ...mediaList]);
-      setUploadFilename('');
-      setUploadPath('');
+      setUploadFile(null);
       setIsUploading(false);
     } catch (err: any) {
-      setErrorMsg(err.message || 'Fehler beim Registrieren der Datei.');
+      setErrorMsg(err.message || 'Fehler beim Hochladen der Datei.');
     }
   };
 
@@ -155,43 +148,26 @@ export const MediaManagerModal: React.FC<MediaManagerModalProps> = ({
               </button>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div className="space-y-1">
-                <label className="text-2xs font-mono text-zinc-400 uppercase">Dateiname *</label>
-                <input
-                  type="text"
-                  required
-                  value={uploadFilename}
-                  onChange={(e) => setUploadFilename(e.target.value)}
-                  placeholder="banner_wpf_v2.png"
-                  className="w-full px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-white placeholder-zinc-500 font-mono text-xs focus:outline-none focus:border-white/30"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-2xs font-mono text-zinc-400 uppercase">Kategorie</label>
-                <select
-                  value={uploadCategory}
-                  onChange={(e) => setUploadCategory(e.target.value as any)}
-                  className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-white/10 text-white text-xs focus:outline-none focus:border-white/30"
-                >
-                  <option value="image">Bild / Cover (PNG/JPG/WEBP)</option>
-                  <option value="file">Binärdatei / Template (ZIP/EXE)</option>
-                  <option value="document">Dokument / PDF (PDF/MD)</option>
-                  <option value="3d">3D Modell (STL/3MF/STEP)</option>
-                </select>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-2xs font-mono text-zinc-400 uppercase">Speicherpfad / URL</label>
-                <input
-                  type="text"
-                  value={uploadPath}
-                  onChange={(e) => setUploadPath(e.target.value)}
-                  placeholder="/src/assets/images/... oder https://"
-                  className="w-full px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-white placeholder-zinc-500 font-mono text-xs focus:outline-none focus:border-white/30"
-                />
-              </div>
+            <div className="space-y-2">
+              <label htmlFor="media-upload-file" className="text-2xs font-mono text-zinc-400 uppercase">
+                Datei auswählen *
+              </label>
+              <input
+                id="media-upload-file"
+                type="file"
+                required
+                accept=".jpg,.jpeg,.png,.webp,.pdf,.zip,.stl,.3mf,.step,.stp"
+                onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+                className="w-full px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-white text-xs file:mr-3 file:px-3 file:py-1 file:border-0 file:rounded-md file:bg-white file:text-black"
+              />
+              <p className="text-2xs text-zinc-500">
+                PNG/JPG/WEBP, PDF, ZIP und 3D-Formate. Typ und Größe werden serverseitig geprüft.
+              </p>
+              {uploadFile && (
+                <p className="text-2xs text-zinc-300 font-mono">
+                  {uploadFile.name} · {(uploadFile.size / 1024 / 1024).toFixed(2)} MB
+                </p>
+              )}
             </div>
 
             <div className="flex justify-end gap-2 pt-1">

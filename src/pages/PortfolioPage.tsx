@@ -30,21 +30,43 @@ export const PortfolioPage: React.FC<PortfolioPageProps> = ({
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [detailError, setDetailError] = useState<string | null>(null);
 
   useEffect(() => {
+    let isCurrent = true;
     setIsLoading(true);
-    api.getProjects()
-      .then((data) => {
-        setProjects(data);
+    setDetailError(null);
+
+    const loadProjects = async () => {
+      try {
+        const data = await api.getProjects();
+        let selectedProject: Project | null = null;
         if (selectedSlug) {
-          const found = data.find((p) => p.slug === selectedSlug);
-          if (found) setActiveProject(found);
-        } else {
-          setActiveProject(null);
+          try {
+            selectedProject = await api.getProjectBySlug(selectedSlug);
+          } catch {
+            setDetailError('Dieses Projekt ist nicht verfügbar oder wurde nicht veröffentlicht.');
+          }
         }
-      })
-      .catch(console.error)
-      .finally(() => setIsLoading(false));
+        if (!isCurrent) return;
+        setProjects(data);
+        setActiveProject(selectedProject);
+      } catch (error) {
+        if (isCurrent) {
+          setProjects([]);
+          setActiveProject(null);
+          setDetailError('Das Portfolio konnte nicht geladen werden.');
+          console.error(error);
+        }
+      } finally {
+        if (isCurrent) setIsLoading(false);
+      }
+    };
+
+    void loadProjects();
+    return () => {
+      isCurrent = false;
+    };
   }, [selectedSlug]);
 
   const categories = [
@@ -93,6 +115,14 @@ export const PortfolioPage: React.FC<PortfolioPageProps> = ({
           <h1 className="text-2xl sm:text-4xl font-extrabold text-white">{activeProject.title}</h1>
           <p className="text-sm text-zinc-300 leading-relaxed max-w-3xl">{activeProject.description}</p>
 
+          {activeProject.coverImage && (
+            <img
+              src={activeProject.coverImage}
+              alt={`${activeProject.title} Cover`}
+              className="w-full max-h-[28rem] object-cover rounded-lg border border-white/10"
+            />
+          )}
+
           <div className="flex flex-wrap gap-2 pt-2">
             {activeProject.techStack.map((tech, idx) => (
               <span
@@ -130,20 +160,33 @@ export const PortfolioPage: React.FC<PortfolioPageProps> = ({
           </div>
         </div>
 
-        {/* Problem & Solution Grid */}
+        {/* Case Study */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="p-6 liquid-glass rounded-xl border border-white/10 space-y-2">
-            <span className="text-2xs font-semibold uppercase tracking-wider text-zinc-400">01. Problemstellung</span>
-            <h3 className="text-sm font-bold text-white">Herausforderung</h3>
-            <p className="text-xs text-zinc-300 leading-relaxed">{activeProject.problem}</p>
-          </div>
-
-          <div className="p-6 liquid-glass rounded-xl border border-white/10 space-y-2">
-            <span className="text-2xs font-semibold uppercase tracking-wider text-zinc-400">02. Technische Lösung</span>
-            <h3 className="text-sm font-bold text-white">Implementierung &amp; Ergebnis</h3>
-            <p className="text-xs text-zinc-300 leading-relaxed">{activeProject.solution}</p>
-          </div>
+          {[
+            { label: 'Problemstellung', value: activeProject.problem || activeProject.caseStudyProblem },
+            { label: 'Ziel', value: activeProject.goal },
+            { label: 'Technische Lösung', value: activeProject.solution || activeProject.caseStudySolution },
+            { label: 'Ergebnis', value: activeProject.result },
+          ].filter((section) => section.value).map((section) => (
+            <div key={section.label} className="p-6 liquid-glass rounded-xl border border-white/10 space-y-2">
+              <span className="text-2xs font-semibold uppercase tracking-wider text-zinc-400">{section.label}</span>
+              <p className="text-xs text-zinc-300 leading-relaxed whitespace-pre-wrap">{section.value}</p>
+            </div>
+          ))}
         </div>
+
+        {activeProject.galleryImages.length > 0 && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {activeProject.galleryImages.map((image, index) => (
+              <img
+                key={`${image}-${index}`}
+                src={image}
+                alt={`${activeProject.title} Bild ${index + 1}`}
+                className="w-full max-h-[28rem] object-cover rounded-lg border border-white/10"
+              />
+            ))}
+          </div>
+        )}
 
         {/* Architecture & Key Features */}
         <div className="p-6 liquid-glass rounded-xl border border-white/10 space-y-4">
@@ -215,6 +258,8 @@ export const PortfolioPage: React.FC<PortfolioPageProps> = ({
       {/* Grid */}
       {isLoading ? (
         <div className="py-16 text-center text-xs text-zinc-500">Lade Portfolio...</div>
+      ) : detailError ? (
+        <div role="alert" className="py-16 text-center text-xs text-zinc-300">{detailError}</div>
       ) : filtered.length === 0 ? (
         <div className="py-20 text-center text-zinc-500 liquid-glass rounded-2xl border border-white/10 space-y-3">
           <Layers className="w-12 h-12 mx-auto text-zinc-600 stroke-[1.5]" />

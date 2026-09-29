@@ -20,11 +20,28 @@ import { DashboardPage } from './pages/DashboardPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { AdminPage } from './pages/AdminPage';
 import { CreatorPage } from './pages/CreatorPage';
-import { ShieldAlert, LogIn, ArrowLeft } from 'lucide-react';
+import { ShieldAlert, ArrowLeft } from 'lucide-react';
+
+const resolveRoute = () => {
+  const segments = window.location.pathname.split('/').filter(Boolean).map((segment) => {
+    try {
+      return decodeURIComponent(segment);
+    } catch {
+      return segment;
+    }
+  });
+  const route = segments[0] || 'home';
+  const knownViews = ['ai', 'portfolio', 'store', 'community', 'dashboard', 'profile', 'creator', 'manage', 'admin'];
+  return {
+    view: knownViews.includes(route) ? route : 'home',
+    slug: ['portfolio', 'store', 'profile'].includes(route) ? segments[1] : undefined,
+  };
+};
 
 function PlatformContent() {
-  const [currentView, setCurrentView] = useState<string>('home');
-  const [detailSlug, setDetailSlug] = useState<string | undefined>(undefined);
+  const [initialRoute] = useState(resolveRoute);
+  const [currentView, setCurrentView] = useState<string>(initialRoute.view);
+  const [detailSlug, setDetailSlug] = useState<string | undefined>(initialRoute.slug);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
 
@@ -32,11 +49,20 @@ function PlatformContent() {
     isLoading,
     isAdmin,
     openAuthModal,
-    switchRole,
     isAuthModalOpen,
     authModalMode,
     closeAuthModal,
   } = useAuth();
+
+  useEffect(() => {
+    const restoreRoute = () => {
+      const route = resolveRoute();
+      setCurrentView(route.view);
+      setDetailSlug(route.slug);
+    };
+    window.addEventListener('popstate', restoreRoute);
+    return () => window.removeEventListener('popstate', restoreRoute);
+  }, []);
 
   // Google Calendar Auth integration state
   const [calendarUser, setCalendarUser] = useState<FirebaseUser | null>(null);
@@ -74,6 +100,14 @@ function PlatformContent() {
   const handleNavigate = (view: string, slug?: string) => {
     setCurrentView(view);
     setDetailSlug(slug);
+    const routePath = view === 'home'
+      ? '/'
+      : ['portfolio', 'store', 'profile'].includes(view) && slug
+        ? `/${view}/${encodeURIComponent(slug)}`
+        : `/${view}`;
+    if (window.location.pathname !== routePath) {
+      window.history.pushState(null, '', routePath);
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -159,13 +193,6 @@ function PlatformContent() {
                 </p>
               </div>
               <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
-                <button
-                  onClick={() => switchRole('ADMIN')}
-                  className="px-4 py-2.5 bg-white text-black font-semibold text-xs rounded-xl hover:bg-zinc-200 transition-colors flex items-center gap-2 cursor-pointer shadow-lg"
-                >
-                  <LogIn className="w-4 h-4" />
-                  <span>Als Administrator authentifizieren</span>
-                </button>
                 <button
                   onClick={() => handleNavigate('home')}
                   className="px-4 py-2.5 glass-2 border border-white/15 text-zinc-300 hover:text-white text-xs font-semibold rounded-xl hover:bg-white/10 transition-colors flex items-center gap-2 cursor-pointer"

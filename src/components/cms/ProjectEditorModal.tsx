@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Project, ContentStatus } from '../../types/platform';
 import { api } from '../../services/api';
+import { MediaManagerModal } from './MediaManagerModal';
 import {
   X,
   Layers,
@@ -95,7 +96,9 @@ export const ProjectEditorModal: React.FC<ProjectEditorModalProps> = ({
   const [problem, setProblem] = useState('');
   const [solution, setSolution] = useState('');
   const [architecture, setArchitecture] = useState('');
+  const [goal, setGoal] = useState('');
   const [caseStudyLearnings, setCaseStudyLearnings] = useState('');
+  const [result, setResult] = useState('');
 
   // Links
   const [githubUrl, setGithubUrl] = useState('');
@@ -106,6 +109,10 @@ export const ProjectEditorModal: React.FC<ProjectEditorModalProps> = ({
 
   // Media
   const [coverImage, setCoverImage] = useState('');
+  const [coverMediaId, setCoverMediaId] = useState('');
+  const [galleryMediaIds, setGalleryMediaIds] = useState<string[]>([]);
+  const [isMediaManagerOpen, setIsMediaManagerOpen] = useState(false);
+  const [mediaTarget, setMediaTarget] = useState<'cover' | 'gallery'>('cover');
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -124,13 +131,17 @@ export const ProjectEditorModal: React.FC<ProjectEditorModalProps> = ({
       setProblem(initialProject.caseStudyProblem || initialProject.problem || '');
       setSolution(initialProject.caseStudySolution || initialProject.solution || '');
       setArchitecture(initialProject.architecture || '');
+      setGoal(initialProject.goal || '');
       setCaseStudyLearnings(initialProject.caseStudyLearnings || '');
+      setResult(initialProject.result || '');
       setGithubUrl(initialProject.githubUrl || '');
       setLiveUrl(initialProject.liveUrl || '');
-      demoUrl && setDemoUrl(initialProject.demoUrl || '');
+      setDemoUrl(initialProject.demoUrl || '');
       setDocumentationUrl(initialProject.documentationUrl || '');
       setVideoUrl(initialProject.videoUrl || '');
       setCoverImage(initialProject.coverImage || '');
+      setCoverMediaId(initialProject.coverMediaId || '');
+      setGalleryMediaIds(initialProject.galleryMediaIds || []);
     } else {
       // Reset defaults for new project
       setTitle('');
@@ -145,13 +156,17 @@ export const ProjectEditorModal: React.FC<ProjectEditorModalProps> = ({
       setProblem('');
       setSolution('');
       setArchitecture('');
+      setGoal('');
       setCaseStudyLearnings('');
+      setResult('');
       setGithubUrl('');
       setLiveUrl('');
       setDemoUrl('');
       setDocumentationUrl('');
       setVideoUrl('');
-      setCoverImage('/src/assets/images/nexus_cyberpunk_banner_1790662130550.jpg');
+      setCoverImage('');
+      setCoverMediaId('');
+      setGalleryMediaIds([]);
     }
     setActiveTab('basics');
     setErrorMsg(null);
@@ -213,6 +228,8 @@ export const ProjectEditorModal: React.FC<ProjectEditorModalProps> = ({
       problem,
       caseStudySolution: solution,
       solution,
+      goal,
+      result,
       architecture,
       caseStudyLearnings,
       githubUrl: githubUrl || undefined,
@@ -220,8 +237,8 @@ export const ProjectEditorModal: React.FC<ProjectEditorModalProps> = ({
       demoUrl: demoUrl || undefined,
       documentationUrl: documentationUrl || undefined,
       videoUrl: videoUrl || undefined,
-      coverImage: coverImage || undefined,
-      galleryImages: [],
+      coverMediaId: coverMediaId || undefined,
+      galleryMediaIds,
     };
 
     try {
@@ -550,8 +567,19 @@ export const ProjectEditorModal: React.FC<ProjectEditorModalProps> = ({
               </div>
 
               <div className="space-y-1.5">
+                <label className="text-2xs font-mono uppercase text-zinc-400">3. Ziel</label>
+                <textarea
+                  value={goal}
+                  onChange={(e) => setGoal(e.target.value)}
+                  rows={3}
+                  placeholder="Welches konkrete Ziel sollte das Projekt erreichen?"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-zinc-500 focus:outline-none focus:border-white/30"
+                />
+              </div>
+
+              <div className="space-y-1.5">
                 <label className="text-2xs font-mono uppercase text-zinc-400">
-                  3. Technische Lösung &amp; Umsetzung
+                  4. Technische Lösung &amp; Umsetzung
                 </label>
                 <textarea
                   value={solution}
@@ -564,7 +592,20 @@ export const ProjectEditorModal: React.FC<ProjectEditorModalProps> = ({
 
               <div className="space-y-1.5">
                 <label className="text-2xs font-mono uppercase text-zinc-400">
-                  4. Erkenntnisse &amp; Learnings (Post-Mortem)
+                  5. Ergebnis
+                </label>
+                <textarea
+                  value={result}
+                  onChange={(e) => setResult(e.target.value)}
+                  rows={3}
+                  placeholder="Was wurde erreicht und wie lässt sich das Ergebnis bewerten?"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-zinc-500 focus:outline-none focus:border-white/30"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-2xs font-mono uppercase text-zinc-400">
+                  6. Erkenntnisse &amp; Learnings (Post-Mortem)
                 </label>
                 <textarea
                   value={caseStudyLearnings}
@@ -630,14 +671,25 @@ export const ProjectEditorModal: React.FC<ProjectEditorModalProps> = ({
           {activeTab === 'media' && (
             <div className="space-y-4">
               <div className="space-y-1.5">
-                <label className="text-2xs font-mono uppercase text-zinc-400">Cover-Bild URL</label>
-                <input
-                  type="text"
-                  value={coverImage}
-                  onChange={(e) => setCoverImage(e.target.value)}
-                  placeholder="/src/assets/images/banner.jpg oder externe HTTPS Bild-URL"
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-zinc-500 focus:outline-none focus:border-white/30 font-mono text-xs"
-                />
+                <label className="text-2xs font-mono uppercase text-zinc-400">Cover aus der Mediathek</label>
+                <div className="flex items-center gap-2">
+                  {coverMediaId && <span className="min-w-0 flex-1 truncate text-2xs text-zinc-400 font-mono">Cover verknüpft</span>}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMediaTarget('cover');
+                      setIsMediaManagerOpen(true);
+                    }}
+                    className="px-3 py-2 glass-2 border border-white/15 rounded-lg text-xs text-white"
+                  >
+                    Mediathek
+                  </button>
+                  {coverMediaId && (
+                    <button type="button" onClick={() => { setCoverMediaId(''); setCoverImage(''); }} className="p-2 text-zinc-400 hover:text-rose-300" aria-label="Cover entfernen">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
               </div>
 
               {coverImage && (
@@ -648,14 +700,44 @@ export const ProjectEditorModal: React.FC<ProjectEditorModalProps> = ({
                       src={coverImage}
                       alt="Cover Preview"
                       className="w-full h-full object-cover"
-                      onError={(e) => {
-                        (e.target as any).src =
-                          '/src/assets/images/nexus_cyberpunk_banner_1790662130550.jpg';
-                      }}
                     />
                   </div>
                 </div>
               )}
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-2xs font-mono uppercase text-zinc-400">Weitere Projektbilder</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMediaTarget('gallery');
+                      setIsMediaManagerOpen(true);
+                    }}
+                    className="px-3 py-1.5 glass-2 border border-white/15 rounded-lg text-2xs text-white"
+                  >
+                    Aus Mediathek
+                  </button>
+                </div>
+                {galleryMediaIds.length > 0 && (
+                  <ul className="space-y-1">
+                    {galleryMediaIds.map((mediaId, index) => (
+                      <li key={mediaId} className="flex items-center gap-2 text-2xs text-zinc-300">
+                        <img src={`/api/media/${encodeURIComponent(mediaId)}/file`} alt={`Projektbild ${index + 1}`} className="w-12 h-8 rounded object-cover" />
+                        <span className="truncate flex-1">Bild {index + 1}</span>
+                        <button
+                          type="button"
+                          onClick={() => setGalleryMediaIds(galleryMediaIds.filter((id) => id !== mediaId))}
+                          className="text-zinc-400 hover:text-rose-300"
+                          aria-label="Bild aus Galerie entfernen"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             </div>
           )}
 
@@ -766,6 +848,21 @@ export const ProjectEditorModal: React.FC<ProjectEditorModalProps> = ({
           </div>
         </div>
       </div>
+
+      <MediaManagerModal
+        isOpen={isMediaManagerOpen}
+        onClose={() => setIsMediaManagerOpen(false)}
+        onSelectMedia={(media) => {
+          if (media.fileCategory !== 'image') {
+            setErrorMsg('Projektcover und Galerie benötigen Bilddateien.');
+          } else if (mediaTarget === 'cover') {
+            setCoverMediaId(media.id);
+            setCoverImage(media.storagePath);
+          } else if (media.fileCategory === 'image' && !galleryMediaIds.includes(media.id) && galleryMediaIds.length < 20) {
+            setGalleryMediaIds([...galleryMediaIds, media.id]);
+          }
+        }}
+      />
     </div>
   );
 };

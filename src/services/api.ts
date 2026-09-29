@@ -154,18 +154,6 @@ export const api = {
     return json.user || json.data;
   },
 
-  async switchRole(role: string): Promise<User> {
-    const res = await fetchWithAuth('/api/auth/switch-role', {
-      method: 'POST',
-      body: JSON.stringify({ role }),
-    });
-    const json = await res.json();
-    if (json.token) {
-      setSessionToken(json.token);
-    }
-    return json.user || json.data;
-  },
-
   async getUserByUsername(username: string): Promise<User> {
     const res = await fetchWithAuth(`/api/users/${encodeURIComponent(username)}`);
     const json = await res.json();
@@ -181,13 +169,15 @@ export const api = {
 
     const res = await fetchWithAuth(`/api/projects?${params.toString()}`);
     const json = await res.json();
-    return json.data || [];
+    if (!res.ok) throw new Error(json.error?.message || 'Projekte konnten nicht geladen werden');
+    return json.data;
   },
 
   async getFeaturedProjects(): Promise<Project[]> {
     const res = await fetchWithAuth('/api/projects/featured');
     const json = await res.json();
-    return json.data || [];
+    if (!res.ok) throw new Error(json.error?.message || 'Hervorgehobene Projekte konnten nicht geladen werden');
+    return json.data;
   },
 
   async getProjectBySlug(slug: string): Promise<Project> {
@@ -245,7 +235,8 @@ export const api = {
 
     const res = await fetchWithAuth(`/api/products?${params.toString()}`);
     const json = await res.json();
-    return json.data || [];
+    if (!res.ok) throw new Error(json.error?.message || 'Produkte konnten nicht geladen werden');
+    return json.data;
   },
 
   async getProductBySlug(slug: string): Promise<Product> {
@@ -325,13 +316,16 @@ export const api = {
     if (category && category !== 'all') params.set('category', category);
     const res = await fetchWithAuth(`/api/media?${params.toString()}`);
     const json = await res.json();
-    return json.data || [];
+    if (!res.ok) throw new Error(json.error?.message || 'Medien konnten nicht geladen werden');
+    return json.data;
   },
 
-  async uploadMedia(mediaData: { filename: string; originalName?: string; storagePath?: string; mimeType?: string; fileSize?: number; fileCategory?: 'image' | 'file' | 'document' | '3d' }): Promise<MediaFile> {
-    const res = await fetchWithAuth('/api/media', {
+  async uploadMedia(file: File): Promise<MediaFile> {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await fetchWithAuth('/api/media/upload', {
       method: 'POST',
-      body: JSON.stringify(mediaData),
+      body: formData,
     });
     const json = await res.json();
     if (!res.ok) throw new Error(json.error?.message || 'Fehler beim Hochladen der Mediendatei');

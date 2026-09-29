@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Product, ContentStatus } from '../../types/platform';
 import { api } from '../../services/api';
+import { MediaManagerModal } from './MediaManagerModal';
 import {
   X,
   ShoppingBag,
@@ -21,6 +22,7 @@ interface ProductEditorModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSaved: (product: Product) => void;
+  canPublish: boolean;
   initialProduct?: Product | null;
 }
 
@@ -48,9 +50,10 @@ export const ProductEditorModal: React.FC<ProductEditorModalProps> = ({
   isOpen,
   onClose,
   onSaved,
+  canPublish,
   initialProduct,
 }) => {
-  const [activeTab, setActiveTab] = useState<'basics' | 'digital' | 'pricing' | 'media' | 'preview'>('basics');
+  const [activeTab, setActiveTab] = useState<'basics' | 'content' | 'digital' | 'pricing' | 'media' | 'seo' | 'preview'>('basics');
 
   // Form State
   const [name, setName] = useState('');
@@ -70,9 +73,20 @@ export const ProductEditorModal: React.FC<ProductEditorModalProps> = ({
   const [fileSize, setFileSize] = useState('15 MB');
   const [version, setVersion] = useState('1.0.0');
   const [license, setLicense] = useState('MIT Open Source');
+  const [tagsText, setTagsText] = useState('');
+  const [featuresText, setFeaturesText] = useState('');
+  const [requirementsText, setRequirementsText] = useState('');
+  const [changelog, setChangelog] = useState('');
+  const [metaTitle, setMetaTitle] = useState('');
+  const [metaDescription, setMetaDescription] = useState('');
 
   // Media & Links
   const [coverImage, setCoverImage] = useState('');
+  const [coverMediaId, setCoverMediaId] = useState('');
+  const [galleryMediaIds, setGalleryMediaIds] = useState<string[]>([]);
+  const [downloadMediaId, setDownloadMediaId] = useState('');
+  const [isMediaManagerOpen, setIsMediaManagerOpen] = useState(false);
+  const [mediaTarget, setMediaTarget] = useState<'cover' | 'gallery' | 'download'>('cover');
   const [demoFileUrl, setDemoFileUrl] = useState('');
   const [documentationUrl, setDocumentationUrl] = useState('');
 
@@ -99,6 +113,15 @@ export const ProductEditorModal: React.FC<ProductEditorModalProps> = ({
       setCoverImage(
         initialProduct.images?.[0] || '/src/assets/images/nexus_cyberpunk_banner_1790662130550.jpg'
       );
+      setCoverMediaId(initialProduct.coverMediaId || initialProduct.mediaFileId || '');
+      setGalleryMediaIds(initialProduct.galleryMediaIds || []);
+      setDownloadMediaId(initialProduct.downloadMediaId || '');
+      setTagsText((initialProduct.tags || []).join(', '));
+      setFeaturesText((initialProduct.features || []).join('\n'));
+      setRequirementsText((initialProduct.requirements || []).join('\n'));
+      setChangelog(initialProduct.changelog || '');
+      setMetaTitle(initialProduct.metaTitle || '');
+      setMetaDescription(initialProduct.metaDescription || '');
       setDemoFileUrl(initialProduct.demoFileUrl || '');
       setDocumentationUrl(initialProduct.documentationUrl || '');
     } else {
@@ -118,6 +141,15 @@ export const ProductEditorModal: React.FC<ProductEditorModalProps> = ({
       setVersion('1.0.0');
       setLicense('MIT Open Source');
       setCoverImage('/src/assets/images/nexus_cyberpunk_banner_1790662130550.jpg');
+      setCoverMediaId('');
+      setGalleryMediaIds([]);
+      setDownloadMediaId('');
+      setTagsText('');
+      setFeaturesText('');
+      setRequirementsText('');
+      setChangelog('');
+      setMetaTitle('');
+      setMetaDescription('');
       setDemoFileUrl('');
       setDocumentationUrl('');
     }
@@ -172,7 +204,16 @@ export const ProductEditorModal: React.FC<ProductEditorModalProps> = ({
       fileSize,
       version,
       license,
-      images: [coverImage || '/src/assets/images/nexus_cyberpunk_banner_1790662130550.jpg'],
+      images: [],
+      coverMediaId: coverMediaId || undefined,
+      galleryMediaIds,
+      downloadMediaId: downloadMediaId || undefined,
+      tags: tagsText.split(',').map((tag) => tag.trim()).filter(Boolean),
+      features: featuresText.split('\n').map((feature) => feature.trim()).filter(Boolean),
+      requirements: requirementsText.split('\n').map((requirement) => requirement.trim()).filter(Boolean),
+      changelog,
+      metaTitle,
+      metaDescription,
       demoFileUrl: demoFileUrl || undefined,
       documentationUrl: documentationUrl || undefined,
     };
@@ -238,10 +279,11 @@ export const ProductEditorModal: React.FC<ProductEditorModalProps> = ({
         <div className="flex items-center gap-1 px-6 pt-2 pb-2 border-b border-white/10 bg-black/20 overflow-x-auto scrollbar-none text-xs">
           {[
             { id: 'basics', label: '1. Grunddaten' },
-            { id: 'digital', label: '2. Digitale Datei & Version' },
-            { id: 'pricing', label: '3. Preis & Lizenz' },
-            { id: 'media', label: '4. Medien & Links' },
-            { id: 'preview', label: '5. Vorschau' },
+            { id: 'content', label: '2. Inhalt' },
+            { id: 'pricing', label: '3. Preis' },
+            { id: 'media', label: '4. Medien & Download' },
+            { id: 'seo', label: '5. SEO' },
+            { id: 'preview', label: '6. Vorschau' },
           ].map((t) => (
             <button
               key={t.id}
@@ -310,7 +352,7 @@ export const ProductEditorModal: React.FC<ProductEditorModalProps> = ({
                   </select>
                 </div>
 
-                <div className="space-y-1.5">
+                {canPublish && <div className="space-y-1.5">
                   <label className="text-2xs font-mono uppercase text-zinc-400">Status</label>
                   <select
                     value={status}
@@ -321,9 +363,9 @@ export const ProductEditorModal: React.FC<ProductEditorModalProps> = ({
                     <option value="PUBLISHED">PUBLISHED (Öffentlich im Store kaufbar/claimbar)</option>
                     <option value="ARCHIVED">ARCHIVED (Archiviert)</option>
                   </select>
-                </div>
+                </div>}
 
-                <div className="space-y-1.5">
+                {canPublish && <div className="space-y-1.5">
                   <label className="text-2xs font-mono uppercase text-zinc-400">Sichtbarkeit</label>
                   <select
                     value={visibility}
@@ -333,7 +375,7 @@ export const ProductEditorModal: React.FC<ProductEditorModalProps> = ({
                     <option value="PUBLIC">Öffentlich</option>
                     <option value="PRIVATE">Privat</option>
                   </select>
-                </div>
+                </div>}
               </div>
 
               <div className="space-y-1.5">
@@ -360,7 +402,7 @@ export const ProductEditorModal: React.FC<ProductEditorModalProps> = ({
                 />
               </div>
 
-              <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10">
+              {canPublish && <div className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10">
                 <input
                   type="checkbox"
                   id="prod-featured"
@@ -374,6 +416,33 @@ export const ProductEditorModal: React.FC<ProductEditorModalProps> = ({
                     Erscheint hervorgehoben auf der Store-Startseite.
                   </span>
                 </label>
+              </div>}
+            </div>
+          )}
+
+          {activeTab === 'content' && (
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-2xs font-mono uppercase text-zinc-400">Tags, durch Komma getrennt</label>
+                <input
+                  type="text"
+                  value={tagsText}
+                  onChange={(e) => setTagsText(e.target.value)}
+                  placeholder="WPF, MVVM, Desktop"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-2xs font-mono uppercase text-zinc-400">Features, je eine Zeile</label>
+                <textarea rows={5} value={featuresText} onChange={(e) => setFeaturesText(e.target.value)} className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white" />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-2xs font-mono uppercase text-zinc-400">Requirements, je eine Zeile</label>
+                <textarea rows={4} value={requirementsText} onChange={(e) => setRequirementsText(e.target.value)} className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white" />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-2xs font-mono uppercase text-zinc-400">Changelog</label>
+                <textarea rows={5} value={changelog} onChange={(e) => setChangelog(e.target.value)} className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white" />
               </div>
             </div>
           )}
@@ -487,15 +556,46 @@ export const ProductEditorModal: React.FC<ProductEditorModalProps> = ({
           {/* TAB 4: MEDIA & LINKS */}
           {activeTab === 'media' && (
             <div className="space-y-4">
-              <div className="space-y-1.5">
-                <label className="text-2xs font-mono uppercase text-zinc-400">Cover-Bild URL</label>
-                <input
-                  type="text"
-                  value={coverImage}
-                  onChange={(e) => setCoverImage(e.target.value)}
-                  placeholder="/src/assets/images/banner.jpg"
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white font-mono text-xs focus:outline-none focus:border-white/30"
-                />
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-2xs font-mono uppercase text-zinc-400">Cover</label>
+                  <button type="button" onClick={() => { setMediaTarget('cover'); setIsMediaManagerOpen(true); }} className="px-3 py-1.5 glass-2 border border-white/15 rounded-lg text-2xs text-white">Mediathek</button>
+                </div>
+                {coverMediaId ? (
+                  <div className="flex items-center justify-between gap-3 p-3 rounded-lg bg-white/5 border border-white/10">
+                    <img src={coverImage || `/api/media/${encodeURIComponent(coverMediaId)}/file`} alt="Produkt-Cover" className="w-20 h-14 rounded object-cover" />
+                    <span className="text-2xs font-mono text-zinc-400">Cover verknüpft</span>
+                    <button type="button" onClick={() => { setCoverMediaId(''); setCoverImage(''); }} className="text-zinc-400 hover:text-rose-300" aria-label="Cover entfernen"><X className="w-4 h-4" /></button>
+                  </div>
+                ) : <p className="text-2xs text-zinc-500">Noch kein Cover ausgewählt.</p>}
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-2xs font-mono uppercase text-zinc-400">Galerie</label>
+                  <button type="button" onClick={() => { setMediaTarget('gallery'); setIsMediaManagerOpen(true); }} className="px-3 py-1.5 glass-2 border border-white/15 rounded-lg text-2xs text-white">Bilder wählen</button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {galleryMediaIds.map((mediaId) => (
+                    <div key={mediaId} className="relative">
+                      <img src={`/api/media/${encodeURIComponent(mediaId)}/file`} alt="Produktgalerie" className="w-20 h-14 rounded object-cover border border-white/10" />
+                      <button type="button" onClick={() => setGalleryMediaIds(galleryMediaIds.filter((id) => id !== mediaId))} className="absolute -top-1 -right-1 p-0.5 bg-black rounded-full text-white" aria-label="Galeriebild entfernen"><X className="w-3 h-3" /></button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-2xs font-mono uppercase text-zinc-400">Digitale Download-Datei</label>
+                  <button type="button" onClick={() => { setMediaTarget('download'); setIsMediaManagerOpen(true); }} className="px-3 py-1.5 glass-2 border border-white/15 rounded-lg text-2xs text-white">Datei wählen</button>
+                </div>
+                {downloadMediaId ? (
+                  <div className="flex items-center justify-between p-3 rounded-lg bg-white/5 border border-white/10 text-2xs font-mono text-zinc-300">
+                    <span>Download-Datei verknüpft</span>
+                    <button type="button" onClick={() => setDownloadMediaId('')} className="text-zinc-400 hover:text-rose-300" aria-label="Download-Datei entfernen"><X className="w-4 h-4" /></button>
+                  </div>
+                ) : <p className="text-2xs text-zinc-500">Noch keine Datei ausgewählt. Datei bleibt bis zu einer Berechtigung privat.</p>}
               </div>
 
               <div className="space-y-1.5">
@@ -518,6 +618,19 @@ export const ProductEditorModal: React.FC<ProductEditorModalProps> = ({
                   placeholder="https://nexus.local/demo-preview"
                   className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white font-mono text-xs focus:outline-none focus:border-white/30"
                 />
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'seo' && (
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-2xs font-mono uppercase text-zinc-400">Meta Title</label>
+                <input type="text" maxLength={255} value={metaTitle} onChange={(e) => setMetaTitle(e.target.value)} className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white" />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-2xs font-mono uppercase text-zinc-400">Meta Description</label>
+                <textarea rows={4} maxLength={500} value={metaDescription} onChange={(e) => setMetaDescription(e.target.value)} className="w-full px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white" />
               </div>
             </div>
           )}
@@ -562,28 +675,38 @@ export const ProductEditorModal: React.FC<ProductEditorModalProps> = ({
           </button>
 
           <div className="flex items-center gap-2.5">
-            <button
-              type="button"
-              disabled={isSubmitting}
-              onClick={() => handleSave('DRAFT')}
-              className="px-4 py-2 glass-2 border border-white/15 text-zinc-200 hover:text-white text-xs font-semibold rounded-xl hover:bg-white/10 transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-            >
-              <Save className="w-4 h-4" />
-              <span>Als Entwurf speichern</span>
+            <button type="button" disabled={isSubmitting} onClick={() => setActiveTab('preview')} className="px-3 py-2 glass-2 border border-white/15 text-zinc-200 text-xs rounded-xl disabled:opacity-50">
+              <Eye className="w-4 h-4 inline mr-1" />Vorschau
             </button>
-
-            <button
-              type="button"
-              disabled={isSubmitting}
-              onClick={() => handleSave('PUBLISHED')}
-              className="px-5 py-2 bg-white text-black font-bold text-xs rounded-xl hover:bg-zinc-200 transition-colors flex items-center gap-1.5 cursor-pointer shadow-lg disabled:opacity-50"
-            >
-              <Send className="w-4 h-4" />
-              <span>{initialProduct ? 'Produkt aktualisieren' : 'Im Store veröffentlichen'}</span>
+            <button type="button" disabled={isSubmitting} onClick={() => handleSave()} className="px-4 py-2 glass-2 border border-white/15 text-zinc-200 text-xs rounded-xl disabled:opacity-50">
+              <Save className="w-4 h-4 inline mr-1" />Speichern
             </button>
+            <button type="button" disabled={isSubmitting} onClick={() => handleSave('DRAFT')} className="px-4 py-2 glass-2 border border-white/15 text-zinc-200 text-xs rounded-xl disabled:opacity-50">
+              <Save className="w-4 h-4 inline mr-1" />Als Entwurf speichern
+            </button>
+            {canPublish && <button type="button" disabled={isSubmitting} onClick={() => handleSave('PUBLISHED')} className="px-4 py-2 bg-white text-black font-bold text-xs rounded-xl disabled:opacity-50">
+              <Send className="w-4 h-4 inline mr-1" />Veröffentlichen
+            </button>}
+            {canPublish && initialProduct && <button type="button" disabled={isSubmitting} onClick={() => handleSave('ARCHIVED')} className="px-4 py-2 glass-2 border border-white/15 text-zinc-200 text-xs rounded-xl disabled:opacity-50">
+              <PackageCheck className="w-4 h-4 inline mr-1" />Archivieren
+            </button>}
           </div>
         </div>
       </div>
+      <MediaManagerModal
+        isOpen={isMediaManagerOpen}
+        onClose={() => setIsMediaManagerOpen(false)}
+        onSelectMedia={(media) => {
+          if (mediaTarget === 'cover') {
+            setCoverMediaId(media.id);
+            setCoverImage(media.storagePath);
+          } else if (mediaTarget === 'gallery' && media.fileCategory === 'image' && !galleryMediaIds.includes(media.id) && galleryMediaIds.length < 20) {
+            setGalleryMediaIds([...galleryMediaIds, media.id]);
+          } else if (mediaTarget === 'download' && media.fileCategory !== 'image') {
+            setDownloadMediaId(media.id);
+          }
+        }}
+      />
     </div>
   );
 };

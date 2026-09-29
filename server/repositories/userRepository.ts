@@ -1,10 +1,42 @@
 import bcrypt from 'bcryptjs';
-import crypto from 'crypto';
-import { executeQuery, getLastDatabaseStatus } from '../config/database';
+import { createHash, randomUUID } from 'crypto';
+import { executeQuery, getLastDatabaseStatus, withTransaction } from '../config/database';
 import { User, UserSession } from '../models/types';
-import { db } from '../db';
 
 export class UserRepository {
+  private requireDatabase(): void {
+    if (!getLastDatabaseStatus().connected) {
+      throw new Error('MariaDB ist nicht erreichbar. Benutzerdaten sind derzeit nicht verfügbar.');
+    }
+  }
+
+  private async mapUser(row: Record<string, any>): Promise<User> {
+    const [rolesRows, badgesRows] = await Promise.all([
+      executeQuery<any>(`SELECT role_id FROM user_roles WHERE user_id = ?`, [row.id]),
+      executeQuery<any>(`SELECT badge FROM user_badges WHERE user_id = ?`, [row.id]),
+    ]);
+    const roles = rolesRows.map((roleRow) => roleRow.role_id as string);
+    const primaryRole = roles[0] || 'USER';
+    return {
+      id: row.id,
+      username: row.username,
+      email: row.email,
+      displayName: row.display_name,
+      role: primaryRole as User['role'],
+      roles: roles.length ? roles : [primaryRole],
+      avatar: row.avatar_url || '',
+      bio: row.bio || '',
+      skills: [],
+      technologies: [],
+      badges: badgesRows.map((badgeRow) => badgeRow.badge),
+      githubUrl: row.github_url,
+      websiteUrl: row.website_url,
+      createdAt: row.created_at,
+      status: row.status,
+      lastLoginAt: row.last_login_at,
+    };
+  }
+
   async hashPassword(password: string): Promise<string> {
     const salt = await bcrypt.genSalt(12);
     return bcrypt.hash(password, salt);
@@ -20,145 +52,28 @@ export class UserRepository {
   }
 
   async findByUsername(username: string): Promise<User | null> {
-    const dbStatus = getLastDatabaseStatus();
-    if (dbStatus.connected) {
-      try {
-        const rows = await executeQuery<any>(
-          `SELECT * FROM users WHERE username = ? LIMIT 1`,
-          [username]
-        );
-        if (rows.length > 0) {
-          const r = rows[0];
-          const rolesRows = await executeQuery<any>(
-            `SELECT role_id FROM user_roles WHERE user_id = ?`,
-            [r.id]
-          );
-          const badgesRows = await executeQuery<any>(
-            `SELECT badge FROM user_badges WHERE user_id = ?`,
-            [r.id]
-          );
-
-          const roleList = rolesRows.map((x) => x.role_id);
-          const primaryRole = roleList[0] || 'USER';
-
-          return {
-            id: r.id,
-            username: r.username,
-            email: r.email,
-            displayName: r.display_name,
-            role: primaryRole,
-            roles: roleList.length > 0 ? roleList : [primaryRole],
-            avatar: r.avatar_url || '/src/assets/images/avatar_ita_developer_1790662143237.jpg',
-            bio: r.bio || '',
-            skills: ['C#', 'WPF', 'Docker', 'MariaDB', '8051 Assembler'],
-            technologies: ['Ubuntu 24.04', 'CasaOS', 'Tailscale', 'Fabric API', 'Bambu P1S'],
-            badges: badgesRows.map((b) => b.badge),
-            githubUrl: r.github_url,
-            websiteUrl: r.website_url,
-            createdAt: r.created_at,
-            status: r.status,
-            lastLoginAt: r.last_login_at,
-          };
-        }
-      } catch (err) {
-        console.warn('MariaDB findByUsername failed:', err);
-      }
-    }
-    const memUser = db.users.find((u) => u.username.toLowerCase() === username.toLowerCase());
-    if (memUser) {
-      return {
-        ...memUser,
-        roles: memUser.roles || [memUser.role],
-      };
-    }
-    return null;
+    this.requireDatabase();
+    const rows = await executeQuery<any>(`SELECT * FROM users WHERE username = ? LIMIT 1`, [username]);
+    return rows.length ? this.mapUser(rows[0]) : null;
   }
 
   async findById(id: string): Promise<User | null> {
-    const dbStatus = getLastDatabaseStatus();
-    if (dbStatus.connected) {
-      try {
-        const rows = await executeQuery<any>(
-          `SELECT * FROM users WHERE id = ? LIMIT 1`,
-          [id]
-        );
-        if (rows.length > 0) {
-          return this.findByUsername(rows[0].username);
-        }
-      } catch (err) {
-        console.warn('MariaDB findById failed:', err);
-      }
-    }
-    const memUser = db.users.find((u) => u.id === id);
-    if (memUser) {
-      return {
-        ...memUser,
-        roles: memUser.roles || [memUser.role],
-      };
-    }
-    return null;
+    this.requireDatabase();
+    const rows = await executeQuery<any>(`SELECT * FROM users WHERE id = ? LIMIT 1`, [id]);
+    return rows.length ? this.mapUser(rows[0]) : null;
   }
 
   async findByEmail(email: string): Promise<User | null> {
-    const dbStatus = getLastDatabaseStatus();
-    if (dbStatus.connected) {
-      try {
-        const rows = await executeQuery<any>(
-          `SELECT * FROM users WHERE email = ? LIMIT 1`,
-          [email]
-        );
-        if (rows.length > 0) {
-          return this.findByUsername(rows[0].username);
-        }
-      } catch (err) {
-        console.warn('MariaDB findByEmail failed:', err);
-      }
-    }
-    const memUser = db.users.find((u) => u.email.toLowerCase() === email.toLowerCase());
-    if (memUser) {
-      return {
-        ...memUser,
-        roles: memUser.roles || [memUser.role],
-      };
-    }
-    return null;
+    this.requireDatabase();
+    const rows = await executeQuery<any>(`SELECT * FROM users WHERE email = ? LIMIT 1`, [email]);
+    return rows.length ? this.mapUser(rows[0]) : null;
   }
 
   async findWithCredentials(identifier: string): Promise<(User & { passwordHash?: string }) | null> {
-    const dbStatus = getLastDatabaseStatus();
-    if (dbStatus.connected) {
-      try {
-        const rows = await executeQuery<any>(
-          `SELECT * FROM users WHERE email = ? OR username = ? LIMIT 1`,
-          [identifier, identifier]
-        );
-        if (rows.length > 0) {
-          const r = rows[0];
-          const user = await this.findByUsername(r.username);
-          if (user) {
-            return {
-              ...user,
-              passwordHash: r.password_hash,
-            };
-          }
-        }
-      } catch (err) {
-        console.warn('MariaDB findWithCredentials failed:', err);
-      }
-    }
-
-    const clean = identifier.toLowerCase();
-    const mem = db.users.find(
-      (u) => u.email.toLowerCase() === clean || u.username.toLowerCase() === clean
-    );
-    if (mem) {
-      return {
-        ...mem,
-        roles: mem.roles || [mem.role],
-        passwordHash: mem.passwordHash,
-      };
-    }
-    return null;
+    this.requireDatabase();
+    const rows = await executeQuery<any>(`SELECT * FROM users WHERE email = ? OR username = ? LIMIT 1`, [identifier, identifier]);
+    if (!rows.length) return null;
+    return { ...await this.mapUser(rows[0]), passwordHash: rows[0].password_hash || undefined };
   }
 
   async createUser(data: {
@@ -170,18 +85,10 @@ export class UserRepository {
     avatarUrl?: string;
     bio?: string;
   }): Promise<User> {
-    const dbStatus = getLastDatabaseStatus();
+    this.requireDatabase();
     const nowIso = new Date().toISOString();
-
-    const allUsers = await this.getAllUsers();
-    const isFirstUser = allUsers.length === 0;
-    const initialRole = isFirstUser ? 'ADMIN' : 'USER';
-    const initialRoles: ('ADMIN' | 'CREATOR' | 'MODERATOR' | 'USER')[] = isFirstUser
-      ? ['ADMIN', 'CREATOR', 'MODERATOR', 'USER']
-      : ['USER'];
-    const initialBadges = isFirstUser
-      ? ['Platform Founder', 'Administrator']
-      : ['Community Member'];
+    const initialRole = 'USER';
+    const initialBadges = ['Community Member'];
 
     const newUser: User = {
       id: data.id,
@@ -189,7 +96,7 @@ export class UserRepository {
       email: data.email,
       displayName: data.displayName,
       role: initialRole,
-      roles: initialRoles,
+      roles: [initialRole],
       passwordHash: data.passwordHash,
       avatar: data.avatarUrl || '/src/assets/images/avatar_ita_developer_1790662143237.jpg',
       bio: data.bio || '',
@@ -200,179 +107,71 @@ export class UserRepository {
       status: 'ACTIVE',
     };
 
-    if (dbStatus.connected) {
-      try {
-        await executeQuery(
-          `INSERT INTO users (id, username, email, password_hash, display_name, avatar_url, bio, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE', NOW(), NOW())`,
-          [
-            data.id,
-            data.username,
-            data.email,
-            data.passwordHash,
-            data.displayName,
-            newUser.avatar,
-            newUser.bio,
-          ]
-        );
-
-        for (const r of initialRoles) {
-          await executeQuery(
-            `INSERT IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)`,
-            [data.id, r]
-          );
-        }
-
-        for (const b of initialBadges) {
-          await executeQuery(
-            `INSERT INTO user_badges (user_id, badge) VALUES (?, ?)`,
-            [data.id, b]
-          );
-        }
-      } catch (err) {
-        console.warn('MariaDB createUser query error:', err);
+    await withTransaction(async (connection) => {
+      await connection.execute(
+        `INSERT INTO users (id, username, email, password_hash, display_name, avatar_url, bio, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE', NOW(), NOW())`,
+        [data.id, data.username, data.email, data.passwordHash, data.displayName, newUser.avatar, newUser.bio]
+      );
+      await connection.execute(`INSERT INTO user_roles (user_id, role_id) VALUES (?, 'USER')`, [data.id]);
+      for (const badge of initialBadges) {
+        await connection.execute(`INSERT INTO user_badges (user_id, badge) VALUES (?, ?)`, [data.id, badge]);
       }
-    }
-
-    // Also persist in server memory
-    const existingIdx = db.users.findIndex((u) => u.id === data.id);
-    if (existingIdx >= 0) {
-      db.users[existingIdx] = newUser;
-    } else {
-      db.users.push(newUser);
-    }
+    });
 
     return newUser;
   }
 
   async updateProfile(userId: string, data: Partial<User>): Promise<User | null> {
-    const dbStatus = getLastDatabaseStatus();
-    if (dbStatus.connected) {
-      try {
-        const fields: string[] = [];
-        const values: any[] = [];
-
-        if (data.displayName !== undefined) {
-          fields.push('display_name = ?');
-          values.push(data.displayName);
-        }
-        if (data.bio !== undefined) {
-          fields.push('bio = ?');
-          values.push(data.bio);
-        }
-        if (data.avatar !== undefined) {
-          fields.push('avatar_url = ?');
-          values.push(data.avatar);
-        }
-        if (data.githubUrl !== undefined) {
-          fields.push('github_url = ?');
-          values.push(data.githubUrl);
-        }
-        if (data.websiteUrl !== undefined) {
-          fields.push('website_url = ?');
-          values.push(data.websiteUrl);
-        }
-
-        if (fields.length > 0) {
+    this.requireDatabase();
+    const fields: string[] = [];
+    const values: unknown[] = [];
+    if (data.displayName !== undefined) { fields.push('display_name = ?'); values.push(data.displayName); }
+    if (data.bio !== undefined) { fields.push('bio = ?'); values.push(data.bio); }
+    if (data.avatar !== undefined) { fields.push('avatar_url = ?'); values.push(data.avatar); }
+    if (data.githubUrl !== undefined) { fields.push('github_url = ?'); values.push(data.githubUrl); }
+    if (data.websiteUrl !== undefined) { fields.push('website_url = ?'); values.push(data.websiteUrl); }
+    if (fields.length) {
           values.push(userId);
-          await executeQuery(`UPDATE users SET ${fields.join(', ')}, updated_at = NOW() WHERE id = ?`, values);
-        }
-      } catch (err) {
-        console.warn('MariaDB updateProfile query error:', err);
-      }
+          await executeQuery(`UPDATE users SET ${fields.join(', ')}, updated_at = NOW() WHERE id = ?`, values as string[]);
     }
-
-    const u = db.users.find((user) => user.id === userId);
-    if (u) {
-      if (data.displayName !== undefined) u.displayName = data.displayName;
-      if (data.bio !== undefined) u.bio = data.bio;
-      if (data.avatar !== undefined) u.avatar = data.avatar;
-      if (data.githubUrl !== undefined) u.githubUrl = data.githubUrl;
-      if (data.websiteUrl !== undefined) u.websiteUrl = data.websiteUrl;
-      if (data.skills !== undefined) u.skills = data.skills;
-      if (data.technologies !== undefined) u.technologies = data.technologies;
-      return u;
-    }
-
     return this.findById(userId);
   }
 
   async updateLastLogin(userId: string): Promise<void> {
-    const dbStatus = getLastDatabaseStatus();
-    if (dbStatus.connected) {
-      try {
-        await executeQuery(`UPDATE users SET last_login_at = NOW() WHERE id = ?`, [userId]);
-      } catch (err) {
-        console.warn('MariaDB updateLastLogin error:', err);
-      }
-    }
-    const u = db.users.find((user) => user.id === userId);
-    if (u) {
-      u.lastLoginAt = new Date().toISOString();
-    }
+    this.requireDatabase();
+    await executeQuery(`UPDATE users SET last_login_at = NOW() WHERE id = ?`, [userId]);
   }
 
   async getAllUsers(): Promise<User[]> {
-    const dbStatus = getLastDatabaseStatus();
-    if (dbStatus.connected) {
-      try {
-        const rows = await executeQuery<any>(`SELECT username FROM users ORDER BY created_at ASC`);
-        const users: User[] = [];
-        for (const r of rows) {
-          const u = await this.findByUsername(r.username);
-          if (u) users.push(u);
-        }
-        if (users.length > 0) return users;
-      } catch (err) {
-        console.warn('MariaDB getAllUsers failed:', err);
-      }
-    }
-    return db.users;
+    this.requireDatabase();
+    const rows = await executeQuery<any>(`SELECT * FROM users ORDER BY created_at ASC`);
+    return Promise.all(rows.map((row) => this.mapUser(row)));
   }
 
   async updateRole(userId: string, newRole: string): Promise<User | null> {
-    const dbStatus = getLastDatabaseStatus();
-    if (dbStatus.connected) {
-      try {
-        await executeQuery(`DELETE FROM user_roles WHERE user_id = ?`, [userId]);
-        await executeQuery(`INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)`, [userId, newRole]);
-      } catch (err) {
-        console.warn('MariaDB updateRole failed:', err);
-      }
-    }
-
-    const u = db.users.find((user) => user.id === userId);
-    if (u) {
-      u.role = newRole as any;
-      if (!u.roles) u.roles = [newRole];
-      else if (!u.roles.includes(newRole)) u.roles = [newRole, ...u.roles];
-      return u;
-    }
-    return null;
+    this.requireDatabase();
+    await withTransaction(async (connection) => {
+      await connection.execute(`DELETE FROM user_roles WHERE user_id = ?`, [userId]);
+      await connection.execute(`INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)`, [userId, newRole]);
+    });
+    return this.findById(userId);
   }
 
   async toggleStatus(userId: string): Promise<User | null> {
-    const u = db.users.find((user) => user.id === userId);
-    if (!u) return null;
-    const newStatus = u.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE';
-    u.status = newStatus;
-
-    const dbStatus = getLastDatabaseStatus();
-    if (dbStatus.connected) {
-      try {
-        await executeQuery(`UPDATE users SET status = ? WHERE id = ?`, [newStatus, userId]);
-      } catch (err) {
-        console.warn('MariaDB toggleStatus failed:', err);
-      }
-    }
-    return u;
+    this.requireDatabase();
+    const rows = await executeQuery<any>(`SELECT status FROM users WHERE id = ? LIMIT 1`, [userId]);
+    if (!rows.length) return null;
+    const newStatus = rows[0].status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE';
+    await executeQuery(`UPDATE users SET status = ? WHERE id = ?`, [newStatus, userId]);
+    return this.findById(userId);
   }
 
   // -------------------------------------------------------------
   // SESSION STORAGE (In-memory + MariaDB user_sessions)
   // -------------------------------------------------------------
   private hashToken(token: string): string {
-    return crypto.createHash('sha256').update(token).digest('hex');
+    return createHash('sha256').update(token).digest('hex');
   }
 
   async createSession(
@@ -382,7 +181,8 @@ export class UserRepository {
     userAgent?: string,
     daysValid: number = 30
   ): Promise<UserSession> {
-    const id = `sess-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    this.requireDatabase();
+    const id = `sess-${randomUUID()}`;
     const tokenHash = this.hashToken(token);
     const expiresAt = new Date(Date.now() + daysValid * 24 * 60 * 60 * 1000).toISOString();
     const createdAt = new Date().toISOString();
@@ -398,104 +198,47 @@ export class UserRepository {
       createdAt,
     };
 
-    // Store in memory
-    db.sessions.push(session);
-
-    // Store in MariaDB if available
-    const dbStatus = getLastDatabaseStatus();
-    if (dbStatus.connected) {
-      try {
-        await executeQuery(
-          `INSERT INTO user_sessions (id, user_id, token_hash, ip_address, user_agent, expires_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-          [id, userId, tokenHash, ipAddress || '127.0.0.1', (userAgent || '').substring(0, 255), new Date(expiresAt)]
-        );
-      } catch (err) {
-        console.warn('MariaDB createSession error:', err);
-      }
-    }
+    await executeQuery(
+      `INSERT INTO user_sessions (id, user_id, token_hash, ip_address, user_agent, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [id, userId, tokenHash, ipAddress || null, (userAgent || '').substring(0, 255), new Date(expiresAt)]
+    );
 
     return session;
   }
 
   async findSession(token: string): Promise<{ session: UserSession; user: User } | null> {
+    this.requireDatabase();
     const tokenHash = this.hashToken(token);
-    const now = new Date().getTime();
-
-    // Check memory first
-    const memSession = db.sessions.find(
-      (s) => (s.token === token || s.tokenHash === tokenHash) && new Date(s.expiresAt).getTime() > now
+    const rows = await executeQuery<any>(
+      `SELECT * FROM user_sessions WHERE token_hash = ? AND expires_at > NOW() LIMIT 1`,
+      [tokenHash]
     );
-
-    if (memSession) {
-      const user = await this.findById(memSession.userId);
-      if (user && user.status === 'ACTIVE') {
-        return { session: memSession, user };
-      }
-    }
-
-    // Check MariaDB
-    const dbStatus = getLastDatabaseStatus();
-    if (dbStatus.connected) {
-      try {
-        const rows = await executeQuery<any>(
-          `SELECT * FROM user_sessions WHERE token_hash = ? AND expires_at > NOW() LIMIT 1`,
-          [tokenHash]
-        );
-        if (rows.length > 0) {
-          const r = rows[0];
-          const user = await this.findById(r.user_id);
-          if (user && user.status === 'ACTIVE') {
-            const s: UserSession = {
-              id: r.id,
-              userId: r.user_id,
-              tokenHash: r.token_hash,
-              token,
-              ipAddress: r.ip_address,
-              userAgent: r.user_agent,
-              expiresAt: new Date(r.expires_at).toISOString(),
-              createdAt: new Date(r.created_at).toISOString(),
-            };
-            // Cache in memory
-            db.sessions.push(s);
-            return { session: s, user };
-          }
-        }
-      } catch (err) {
-        console.warn('MariaDB findSession error:', err);
-      }
-    }
-
-    return null;
+    if (!rows.length) return null;
+    const row = rows[0];
+    const user = await this.findById(row.user_id);
+    if (!user || user.status !== 'ACTIVE') return null;
+    const session: UserSession = {
+      id: row.id,
+      userId: row.user_id,
+      tokenHash: row.token_hash,
+      ipAddress: row.ip_address,
+      userAgent: row.user_agent,
+      expiresAt: new Date(row.expires_at).toISOString(),
+      createdAt: new Date(row.created_at).toISOString(),
+    };
+    return { session, user };
   }
 
   async deleteSession(token: string): Promise<void> {
+    this.requireDatabase();
     const tokenHash = this.hashToken(token);
-    const idx = db.sessions.findIndex((s) => s.token === token || s.tokenHash === tokenHash);
-    if (idx >= 0) {
-      db.sessions.splice(idx, 1);
-    }
-
-    const dbStatus = getLastDatabaseStatus();
-    if (dbStatus.connected) {
-      try {
-        await executeQuery(`DELETE FROM user_sessions WHERE token_hash = ?`, [tokenHash]);
-      } catch (err) {
-        console.warn('MariaDB deleteSession error:', err);
-      }
-    }
+    await executeQuery(`DELETE FROM user_sessions WHERE token_hash = ?`, [tokenHash]);
   }
 
   async deleteUserSessions(userId: string): Promise<void> {
-    db.sessions = db.sessions.filter((s) => s.userId !== userId);
-    const dbStatus = getLastDatabaseStatus();
-    if (dbStatus.connected) {
-      try {
-        await executeQuery(`DELETE FROM user_sessions WHERE user_id = ?`, [userId]);
-      } catch (err) {
-        console.warn('MariaDB deleteUserSessions error:', err);
-      }
-    }
+    this.requireDatabase();
+    await executeQuery(`DELETE FROM user_sessions WHERE user_id = ?`, [userId]);
   }
 }
 

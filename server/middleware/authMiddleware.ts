@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { authService } from '../services/authService';
 import { User } from '../models/types';
+import { getLastDatabaseStatus } from '../config/database';
 
 export interface AuthenticatedRequest extends Request {
   user?: User;
@@ -73,6 +74,13 @@ export const authenticate = async (
     }
   } catch (err) {
     console.warn('Session authentication error:', err);
+    const message = err instanceof Error ? err.message : '';
+    if (!getLastDatabaseStatus().connected && message.includes('MariaDB')) {
+      return res.status(503).json({
+        success: false,
+        error: { message: 'MariaDB ist nicht erreichbar. Die Session konnte nicht geprüft werden.' },
+      });
+    }
   }
   next();
 };

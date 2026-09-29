@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { api } from '../services/api';
 import { Product } from '../types/platform';
+import { useAuth } from './AuthContext';
 
 export interface CartItem {
   id: string;
@@ -28,6 +29,7 @@ interface CartContextType {
 const CartContext = createContext<CartContextType | undefined>(undefined);
 
 export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { isAuthenticated, openAuthModal } = useAuth();
   const [items, setItems] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
 
@@ -51,10 +53,18 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   useEffect(() => {
-    loadCart();
-  }, []);
+    if (isAuthenticated) {
+      void loadCart();
+    } else {
+      setItems([]);
+    }
+  }, [isAuthenticated]);
 
   const addToCart = async (product: Product, quantity = 1) => {
+    if (!isAuthenticated) {
+      openAuthModal('login');
+      return;
+    }
     try {
       await api.addToCart(product.id, quantity);
       await loadCart();
@@ -65,6 +75,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const removeFromCart = async (productId: string) => {
+    if (!isAuthenticated) return;
     try {
       await api.removeFromCart(productId);
       await loadCart();
@@ -74,6 +85,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const clearCart = async () => {
+    if (!isAuthenticated) return;
     try {
       await api.clearCart();
       setItems([]);

@@ -1,13 +1,14 @@
+import { randomUUID } from 'crypto';
 import { executeQuery, getLastDatabaseStatus } from '../config/database';
 import { AiConversation, AiMessage } from '../models/types';
 
-const inMemoryConversations: AiConversation[] = [];
-const inMemoryMessages: AiMessage[] = [];
-
 export class AiConversationRepository {
   async createConversation(userId: string, title: string, roleId: string = 'general'): Promise<AiConversation> {
+    if (!getLastDatabaseStatus().connected) {
+      throw new Error('MariaDB ist nicht erreichbar. AI-Konversationen können nicht gespeichert werden.');
+    }
     const conv: AiConversation = {
-      id: `conv-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      id: `conv-${randomUUID()}`,
       userId,
       title,
       role: roleId,
@@ -15,51 +16,39 @@ export class AiConversationRepository {
       updatedAt: new Date().toISOString(),
     };
 
-    const dbStatus = getLastDatabaseStatus();
-    if (dbStatus.connected) {
-      try {
-        await executeQuery(
-          `INSERT INTO ai_conversations (id, user_id, title, role_id, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-          [conv.id, conv.userId, conv.title, conv.role, conv.createdAt, conv.updatedAt]
-        );
-      } catch (err) {
-        console.warn('MariaDB createConversation failed:', err);
-      }
-    }
-
-    inMemoryConversations.unshift(conv);
+    await executeQuery(
+      `INSERT INTO ai_conversations (id, user_id, title, role_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [conv.id, conv.userId, conv.title, conv.role, conv.createdAt, conv.updatedAt]
+    );
     return conv;
   }
 
   async getConversations(userId: string): Promise<AiConversation[]> {
-    const dbStatus = getLastDatabaseStatus();
-    if (dbStatus.connected) {
-      try {
-        const rows = await executeQuery<any>(
-          `SELECT id, user_id, title, role_id as role, created_at, updated_at 
-           FROM ai_conversations WHERE user_id = ? ORDER BY updated_at DESC LIMIT 30`,
-          [userId]
-        );
-        return rows.map((r) => ({
-          id: r.id,
-          userId: r.user_id,
-          title: r.title,
-          role: r.role,
-          createdAt: r.created_at,
-          updatedAt: r.updated_at,
-        }));
-      } catch (err) {
-        console.warn('MariaDB getConversations failed:', err);
-      }
+    if (!getLastDatabaseStatus().connected) {
+      throw new Error('MariaDB ist nicht erreichbar. AI-Konversationen sind derzeit nicht verfügbar.');
     }
-
-    return inMemoryConversations.filter((c) => c.userId === userId);
+    const rows = await executeQuery<any>(
+      `SELECT id, user_id, title, role_id as role, created_at, updated_at
+       FROM ai_conversations WHERE user_id = ? ORDER BY updated_at DESC LIMIT 30`,
+      [userId]
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      userId: row.user_id,
+      title: row.title,
+      role: row.role,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
   }
 
   async addMessage(conversationId: string, role: 'user' | 'assistant' | 'system', content: string, model: string = 'gemini-3.5-flash'): Promise<AiMessage> {
+    if (!getLastDatabaseStatus().connected) {
+      throw new Error('MariaDB ist nicht erreichbar. AI-Nachrichten können nicht gespeichert werden.');
+    }
     const msg: AiMessage = {
-      id: `aimsg-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      id: `aimsg-${randomUUID()}`,
       conversationId,
       role,
       content,
@@ -67,50 +56,32 @@ export class AiConversationRepository {
       createdAt: new Date().toISOString(),
     };
 
-    const dbStatus = getLastDatabaseStatus();
-    if (dbStatus.connected) {
-      try {
-        await executeQuery(
-          `INSERT INTO ai_messages (id, conversation_id, role, content, model, created_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-          [msg.id, msg.conversationId, msg.role, msg.content, msg.model, msg.createdAt]
-        );
-        await executeQuery(
-          `UPDATE ai_conversations SET updated_at = ? WHERE id = ?`,
-          [msg.createdAt, conversationId]
-        );
-      } catch (err) {
-        console.warn('MariaDB addMessage failed:', err);
-      }
-    }
-
-    inMemoryMessages.push(msg);
+    await executeQuery(
+      `INSERT INTO ai_messages (id, conversation_id, role, content, model, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [msg.id, msg.conversationId, msg.role, msg.content, msg.model, msg.createdAt]
+    );
+    await executeQuery(`UPDATE ai_conversations SET updated_at = ? WHERE id = ?`, [msg.createdAt, conversationId]);
     return msg;
   }
 
   async getMessages(conversationId: string): Promise<AiMessage[]> {
-    const dbStatus = getLastDatabaseStatus();
-    if (dbStatus.connected) {
-      try {
-        const rows = await executeQuery<any>(
-          `SELECT id, conversation_id, role, content, model, created_at 
-           FROM ai_messages WHERE conversation_id = ? ORDER BY created_at ASC`,
-          [conversationId]
-        );
-        return rows.map((r) => ({
-          id: r.id,
-          conversationId: r.conversation_id,
-          role: r.role,
-          content: r.content,
-          model: r.model,
-          createdAt: r.created_at,
-        }));
-      } catch (err) {
-        console.warn('MariaDB getMessages failed:', err);
-      }
+    if (!getLastDatabaseStatus().connected) {
+      throw new Error('MariaDB ist nicht erreichbar. AI-Nachrichten sind derzeit nicht verfügbar.');
     }
-
-    return inMemoryMessages.filter((m) => m.conversationId === conversationId);
+    const rows = await executeQuery<any>(
+      `SELECT id, conversation_id, role, content, model, created_at
+       FROM ai_messages WHERE conversation_id = ? ORDER BY created_at ASC`,
+      [conversationId]
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      conversationId: row.conversation_id,
+      role: row.role,
+      content: row.content,
+      model: row.model,
+      createdAt: row.created_at,
+    }));
   }
 }
 

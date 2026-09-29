@@ -31,7 +31,7 @@ interface CreatorPageProps {
 }
 
 export const CreatorPage: React.FC<CreatorPageProps> = ({ onNavigate }) => {
-  const { currentUser, isAuthenticated, isCreator, isAdmin, switchRole, openAuthModal } = useAuth();
+  const { currentUser, isAuthenticated, isCreator, isAdmin, openAuthModal } = useAuth();
 
   const [activeTab, setActiveTab] = useState<'overview' | 'projects' | 'products' | 'media' | 'drafts'>('overview');
   const [stats, setStats] = useState<{
@@ -184,6 +184,16 @@ export const CreatorPage: React.FC<CreatorPageProps> = ({ onNavigate }) => {
             <span>Jetzt anmelden</span>
           </button>
         </div>
+      </div>
+    );
+  }
+
+  if (!isCreator && !isAdmin) {
+    return (
+      <div className="max-w-2xl mx-auto py-24 px-4 text-center space-y-4">
+        <AlertCircle className="w-10 h-10 mx-auto text-zinc-400" />
+        <h1 className="text-xl font-bold text-white">Creator-Zugriff erforderlich</h1>
+        <p className="text-xs text-zinc-400">Dein Konto darf keine Projekte oder Produkte verwalten.</p>
       </div>
     );
   }
@@ -882,6 +892,7 @@ export const CreatorPage: React.FC<CreatorPageProps> = ({ onNavigate }) => {
       <ProductEditorModal
         isOpen={isProductModalOpen}
         onClose={() => setIsProductModalOpen(false)}
+        canPublish={isCreator || isAdmin}
         initialProduct={editingProduct}
         onSaved={(saved) => {
           showFeedback(`Produkt "${saved.name}" gespeichert.`);

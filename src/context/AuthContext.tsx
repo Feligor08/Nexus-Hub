@@ -15,7 +15,6 @@ interface AuthContextType {
   }) => Promise<void>;
   logout: () => Promise<void>;
   updateProfile: (profileData: Partial<User>) => Promise<User>;
-  switchRole: (role: 'GUEST' | 'USER' | 'CREATOR' | 'MODERATOR' | 'ADMIN') => Promise<void>;
   refreshUser: () => Promise<void>;
   isAdmin: boolean;
   isCreator: boolean;
@@ -103,16 +102,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return updated;
   };
 
-  const switchRole = async (role: 'GUEST' | 'USER' | 'CREATOR' | 'MODERATOR' | 'ADMIN') => {
-    try {
-      const updated = await api.switchRole(role);
-      setCurrentUser(updated);
-      setIsAuthenticated(role !== 'GUEST');
-    } catch (e) {
-      console.error('Failed to switch role:', e);
-    }
-  };
-
   const userRoles = currentUser?.roles || (currentUser?.role ? [currentUser.role] : []);
   const isAdmin = currentUser?.role === 'ADMIN' || userRoles.includes('ADMIN');
   const isCreator = isAdmin || currentUser?.role === 'CREATOR' || userRoles.includes('CREATOR');
@@ -128,7 +117,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         register,
         logout,
         updateProfile,
-        switchRole,
         refreshUser: loadUser,
         isAdmin,
         isCreator,
