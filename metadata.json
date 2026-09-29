@@ -1,0 +1,6 @@
+{
+  "name": "Nexus Code Play",
+  "description": "Cyberpunk IT & development assistant platform for ITA apprentice projects, server infrastructure, Gemini AI workflows, and schedule management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
