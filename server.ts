@@ -37,7 +37,7 @@ app.use('/api/v1', apiRouter);
       const migrationRes = await runMigrations();
       console.log(`[Migrations] ${migrationRes.message}`);
     } else {
-      console.log(`[Database] MariaDB status: DISCONNECTED (${dbStatus.error || 'Host unreachable'}). Data-backed API operations will fail; no in-memory repository fallback is enabled.`);
+      console.log(`[Database] MariaDB status: ${dbStatus.diagnosticCode}. Data-backed API operations will fail; no in-memory repository fallback is enabled.`);
     }
   } catch (err: any) {
     console.warn('[Database] Initial connection check warning:', err.message);

@@ -16,13 +16,17 @@ export class DatabaseHealthService {
     const status = await testDatabaseConnection();
 
     // Log the health check into api_endpoints_log
-    await auditRepository.logEndpointCheck(
-      '/api/health/database',
-      'MariaDB',
-      status.connected ? 200 : 503,
-      status.latencyMs || 0,
-      status.connected ? 'OPTIMAL' : 'DOWN'
-    );
+    try {
+      await auditRepository.logEndpointCheck(
+        '/api/health/database',
+        'MariaDB',
+        status.connected ? 200 : 503,
+        status.latencyMs || 0,
+        status.connected ? 'OPTIMAL' : 'DOWN'
+      );
+    } catch (error) {
+      console.warn('Database health audit logging failed.');
+    }
 
     const result = {
       success: status.connected,

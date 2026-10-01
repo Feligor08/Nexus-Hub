@@ -30,7 +30,7 @@ export async function runMigrations(): Promise<MigrationResult> {
       applied: [],
       deferred: [],
       message: 'MariaDB is not reachable. Migrations deferred until connection is active.',
-      error: dbHealth.error,
+      error: dbHealth.diagnosticCode,
     };
   }
 

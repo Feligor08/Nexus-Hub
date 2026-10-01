@@ -13,6 +13,7 @@ import { mediaRepository } from '../repositories/mediaRepository';
 import { downloadRepository } from '../repositories/downloadRepository';
 import { runMigrations } from '../migrations/migrator';
 import { authenticate, requireAuth, requireRole, AuthenticatedRequest } from '../middleware/authMiddleware';
+import { createIpRateLimiter } from '../middleware/rateLimit';
 import { User, Order, ProductVersion, Project, Product, PublicProfile } from '../models/types';
 import { getLastDatabaseStatus, withTransaction } from '../config/database';
 import { mediaStorage, getUploadCategory } from '../services/mediaStorage';
@@ -56,30 +57,9 @@ const logAudit = async (action: string, details: string, req: AuthenticatedReque
   await auditRepository.log(action, userId, username, details, ip);
 };
 
-const createAuthRateLimiter = (limit: number, windowMs: number) => {
-  const attempts = new Map<string, { count: number; resetAt: number }>();
-  return (req: Request, res: Response, next: NextFunction) => {
-    const now = Date.now();
-    if (attempts.size > 5000) {
-      for (const [key, bucket] of attempts) if (bucket.resetAt <= now) attempts.delete(key);
-      while (attempts.size > 5000) attempts.delete(attempts.keys().next().value!);
-    }
-    const key = `${req.path}:${req.socket.remoteAddress || 'unknown'}`;
-    const current = attempts.get(key);
-    const bucket = !current || current.resetAt <= now ? { count: 0, resetAt: now + windowMs } : current;
-    if (bucket.count >= limit) {
-      res.setHeader('Retry-After', String(Math.max(1, Math.ceil((bucket.resetAt - now) / 1000))));
-      return res.status(429).json({ success: false, error: { message: 'Zu viele Versuche. Bitte später erneut versuchen.' } });
-    }
-    bucket.count += 1;
-    attempts.set(key, bucket);
-    next();
-  };
-};
-
-const limitRegisterAttempts = createAuthRateLimiter(5, 15 * 60 * 1000);
-const limitLoginAttempts = createAuthRateLimiter(10, 15 * 60 * 1000);
-const limitPasswordAttempts = createAuthRateLimiter(5, 15 * 60 * 1000);
+const limitRegisterAttempts = createIpRateLimiter(5, 15 * 60 * 1000);
+const limitLoginAttempts = createIpRateLimiter(10, 15 * 60 * 1000);
+const limitPasswordAttempts = createIpRateLimiter(5, 15 * 60 * 1000);
 
 const isAdmin = (user?: User) => Boolean(user && (user.role === 'ADMIN' || user.roles?.includes('ADMIN')));
 
@@ -280,21 +260,22 @@ const requireProjectDatabase = (res: Response): boolean => {
 // -------------------------------------------------------------
 apiRouter.get('/health', async (req: Request, res: Response) => {
   const dbHealth = await databaseHealthService.checkHealth();
-  res.json({
+  return res.json({
     success: true,
-    status: 'ONLINE',
+    status: dbHealth.database.connected ? 'ONLINE' : 'DEGRADED',
     platform: 'Nexus Code Play',
     services: {
       api: 'ONLINE',
-      database: dbHealth.database.connected ? 'CONNECTED' : 'DISCONNECTED',
+      database: dbHealth.database.connected ? 'CONNECTED' : 'DEGRADED',
       ai: process.env.GEMINI_API_KEY ? 'AVAILABLE' : 'DEGRADED',
       calendar: 'CONNECTED',
       storage: 'AVAILABLE',
     },
     database: {
-      connected: dbHealth.database.connected,
-      type: dbHealth.database.type,
+      status: dbHealth.database.status,
+      message: dbHealth.database.connected ? 'Database connected' : 'Database unavailable',
       latencyMs: dbHealth.database.latencyMs,
+      checkedAt: dbHealth.database.checkedAt,
     },
     infrastructure: {
       host: 'HP EliteDesk 800 G3 Mini',
@@ -308,28 +289,24 @@ apiRouter.get('/health', async (req: Request, res: Response) => {
 apiRouter.get('/health/database', async (req: Request, res: Response) => {
   const result = await databaseHealthService.checkHealth();
   if (result.success) {
-    res.json({
+    return res.json({
       success: true,
       database: {
-        connected: true,
-        type: result.database.type,
-        host: result.database.host,
-        database: result.database.database,
+        status: 'connected',
+        message: 'Database connected',
         latencyMs: result.database.latencyMs,
         checkedAt: result.database.checkedAt,
       },
     });
-  } else {
-    res.status(503).json({
-      success: false,
-      database: {
-        connected: false,
-        type: 'MariaDB',
-        error: result.database.error || 'Connection refused or host unreachable',
-        checkedAt: result.database.checkedAt,
-      },
-    });
   }
+  return res.status(503).json({
+    success: false,
+    database: {
+      status: 'degraded',
+      message: 'Database unavailable',
+      checkedAt: result.database.checkedAt,
+    },
+  });
 });
 
 // Run MariaDB migrations endpoint (Admin only)
