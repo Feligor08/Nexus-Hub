@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { createReadStream } from 'fs';
 import { mkdir, open, unlink } from 'fs/promises';
 import path from 'path';
+import { RequestHandler } from 'express';
 import multer from 'multer';
 import { fileTypeFromFile } from 'file-type';
 import { config } from '../config/env';
@@ -81,6 +82,7 @@ function isSafeOriginalName(name: string): boolean {
 
 export class LocalMediaStorage {
   readonly rootPath = config.mediaStoragePath;
+  readonly upload: multer.Multer;
 
   private resolveKey(storageKey: string): string {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(storageKey)) {
@@ -95,7 +97,8 @@ export class LocalMediaStorage {
     return absolutePath;
   }
 
-  readonly upload = multer({
+  constructor() {
+    this.upload = multer({
     storage: multer.diskStorage({
       destination: (_request, _file, callback) => {
         mkdir(this.rootPath, { recursive: true }).then(
@@ -113,7 +116,12 @@ export class LocalMediaStorage {
       }
       callback(null, true);
     },
-  });
+    });
+  }
+
+  uploadSingle(fieldName: string): RequestHandler {
+    return this.upload.single(fieldName);
+  }
 
   createReadStream(storageKey: string) {
     return createReadStream(this.resolveKey(storageKey));
@@ -128,4 +136,11 @@ export class LocalMediaStorage {
   }
 }
 
-export const mediaStorage = new LocalMediaStorage();
+export interface MediaStorageProvider {
+  uploadSingle(fieldName: string): RequestHandler;
+  createReadStream(storageKey: string): ReturnType<typeof createReadStream>;
+  verifyFile(filePath: string, originalName: string): Promise<boolean>;
+  remove(storageKey: string): Promise<void>;
+}
+
+export const mediaStorage: MediaStorageProvider = new LocalMediaStorage();

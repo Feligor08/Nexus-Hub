@@ -47,6 +47,8 @@ function PlatformContent() {
 
   const {
     isLoading,
+    authError,
+    refreshUser,
     isAdmin,
     openAuthModal,
     isAuthModalOpen,
@@ -134,6 +136,17 @@ function PlatformContent() {
         onOpenSearch={() => setIsSearchOpen(true)}
       />
 
+      {authError && (
+        <div role="alert" className="mx-auto mt-3 w-full max-w-7xl px-4 sm:px-6">
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-700/50 bg-amber-950/30 px-3 py-2 text-xs text-amber-100">
+            <span>{authError}</span>
+            <button type="button" onClick={() => void refreshUser()} className="shrink-0 underline underline-offset-2">
+              Erneut prüfen
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Main Viewport */}
       <main className="flex-1">
         {currentView === 'home' && <HomePage onNavigate={handleNavigate} />}
@@ -172,7 +185,7 @@ function PlatformContent() {
 
         {currentView === 'profile' && (
           <ProfilePage
-            username={detailSlug || 'feligor08'}
+            username={detailSlug}
             onNavigateToProject={(slug) => handleNavigate('portfolio', slug)}
           />
         )}

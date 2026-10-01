@@ -7,7 +7,7 @@ interface CartDrawerProps {
 }
 
 export const CartDrawer: React.FC<CartDrawerProps> = ({ onProceedToCheckout }) => {
-  const { isCartOpen, setIsCartOpen, items, removeFromCart, totalAmount, itemCount } = useCart();
+  const { isCartOpen, setIsCartOpen, items, removeFromCart, totalAmount, itemCount, cartError } = useCart();
 
   if (!isCartOpen) return null;
 
@@ -27,6 +27,12 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onProceedToCheckout }) =
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {cartError && (
+          <div role="alert" className="mt-3 p-3 bg-rose-950/40 border border-rose-800/50 rounded-lg text-xs text-rose-200">
+            {cartError}
+          </div>
+        )}
 
         {/* Items List */}
         <div className="flex-1 overflow-y-auto py-4 space-y-3 pr-1">
@@ -81,7 +87,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onProceedToCheckout }) =
 
           <p className="text-2xs text-zinc-500 flex items-center gap-1">
             <Download className="w-3 h-3 text-zinc-400" />
-            <span>Sofortiger digitaler Download nach Kaufabschluss.</span>
+            <span>Zahlungen sind derzeit nicht verfügbar. Keine Bestellung wird ausgelöst.</span>
           </p>
 
           <button

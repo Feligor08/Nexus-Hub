@@ -147,6 +147,13 @@ export const StorePage: React.FC<StorePageProps> = ({
               {activeProduct.images[0] && (
                 <img src={activeProduct.images[0]} alt={activeProduct.name} className="w-full max-h-[28rem] rounded-lg object-cover border border-white/10" />
               )}
+              {activeProduct.images.length > 1 && (
+                <div className="grid grid-cols-2 gap-3">
+                  {activeProduct.images.slice(1).map((image, index) => (
+                    <img key={`${image}-${index}`} src={image} alt={`${activeProduct.name} Bild ${index + 2}`} className="w-full max-h-64 rounded-lg object-cover border border-white/10" />
+                  ))}
+                </div>
+              )}
               {activeProduct.tags?.length ? <div className="flex flex-wrap gap-2">{activeProduct.tags.map((tag) => <span key={tag} className="px-2 py-1 bg-white/5 border border-white/10 rounded text-2xs text-zinc-300">{tag}</span>)}</div> : null}
             </div>
 
@@ -216,7 +223,7 @@ export const StorePage: React.FC<StorePageProps> = ({
                   <span>
                     {activeProduct.price === 0
                       ? 'Direkter Download-Token ohne Bezahlung'
-                      : 'Sofortiger digitaler Download nach Kauf'}
+                      : 'Bezahlter Checkout derzeit nicht verfügbar'}
                   </span>
                 </div>
                 <div className="flex items-center gap-2">

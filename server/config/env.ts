@@ -8,7 +8,7 @@ export const config = {
   port: Number(process.env.PORT) || 3000,
   mediaStoragePath: path.resolve(process.env.MEDIA_STORAGE_PATH || 'var/media'),
   db: {
-    host: process.env.DB_HOST || '127.0.0.1',
+    host: process.env.DB_HOST?.trim() || 'DB_HOST_NOT_CONFIGURED',
     port: Number(process.env.DB_PORT) || 3306,
     database: process.env.DB_NAME || 'nexus_code_play',
     user: process.env.DB_USER || 'nexus_app',

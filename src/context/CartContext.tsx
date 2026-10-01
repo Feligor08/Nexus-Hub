@@ -18,6 +18,7 @@ interface CartContextType {
   items: CartItem[];
   itemCount: number;
   totalAmount: number;
+  cartError: string | null;
   addToCart: (product: Product, quantity?: number) => Promise<void>;
   removeFromCart: (productId: string) => Promise<void>;
   clearCart: () => Promise<void>;
@@ -32,8 +33,10 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const { isAuthenticated, openAuthModal } = useAuth();
   const [items, setItems] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
+  const [cartError, setCartError] = useState<string | null>(null);
 
   const loadCart = async () => {
+    setCartError(null);
     try {
       const data = await api.getCart();
       const mapped: CartItem[] = data.map((item: any) => ({
@@ -49,6 +52,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setItems(mapped);
     } catch (e) {
       console.error('Failed to load cart:', e);
+      setCartError(e instanceof Error ? e.message : 'Warenkorb konnte nicht geladen werden.');
     }
   };
 
@@ -71,6 +75,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsCartOpen(true);
     } catch (e) {
       console.error('Failed to add to cart:', e);
+      setCartError(e instanceof Error ? e.message : 'Produkt konnte nicht hinzugefügt werden.');
     }
   };
 
@@ -81,6 +86,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await loadCart();
     } catch (e) {
       console.error('Failed to remove from cart:', e);
+      setCartError(e instanceof Error ? e.message : 'Produkt konnte nicht entfernt werden.');
     }
   };
 
@@ -91,6 +97,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setItems([]);
     } catch (e) {
       console.error('Failed to clear cart:', e);
+      setCartError(e instanceof Error ? e.message : 'Warenkorb konnte nicht geleert werden.');
     }
   };
 
@@ -103,6 +110,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
         items,
         itemCount,
         totalAmount,
+        cartError,
         addToCart,
         removeFromCart,
         clearCart,

@@ -13,7 +13,7 @@ import { mediaRepository } from '../repositories/mediaRepository';
 import { downloadRepository } from '../repositories/downloadRepository';
 import { runMigrations } from '../migrations/migrator';
 import { authenticate, requireAuth, requireRole, AuthenticatedRequest } from '../middleware/authMiddleware';
-import { User, Order, ProductVersion, Project, Product } from '../models/types';
+import { User, Order, ProductVersion, Project, Product, PublicProfile } from '../models/types';
 import { getLastDatabaseStatus, withTransaction } from '../config/database';
 import { mediaStorage, getUploadCategory } from '../services/mediaStorage';
 import multer from 'multer';
@@ -37,7 +37,7 @@ const ai = new GoogleGenAI({
   },
 });
 
-const isProd = process.env.NODE_ENV === 'production';
+const isProd = process.env.NODE_ENV === 'production' || process.env.APP_ENV === 'production';
 
 const setSessionCookie = (res: Response, token: string) => {
   const flags = `Path=/; HttpOnly; SameSite=Lax; Max-Age=${30 * 24 * 3600}${isProd ? '; Secure' : ''}`;
@@ -55,6 +55,31 @@ const logAudit = async (action: string, details: string, req: AuthenticatedReque
   const username = req.user?.username || 'anonymous';
   await auditRepository.log(action, userId, username, details, ip);
 };
+
+const createAuthRateLimiter = (limit: number, windowMs: number) => {
+  const attempts = new Map<string, { count: number; resetAt: number }>();
+  return (req: Request, res: Response, next: NextFunction) => {
+    const now = Date.now();
+    if (attempts.size > 5000) {
+      for (const [key, bucket] of attempts) if (bucket.resetAt <= now) attempts.delete(key);
+      while (attempts.size > 5000) attempts.delete(attempts.keys().next().value!);
+    }
+    const key = `${req.path}:${req.socket.remoteAddress || 'unknown'}`;
+    const current = attempts.get(key);
+    const bucket = !current || current.resetAt <= now ? { count: 0, resetAt: now + windowMs } : current;
+    if (bucket.count >= limit) {
+      res.setHeader('Retry-After', String(Math.max(1, Math.ceil((bucket.resetAt - now) / 1000))));
+      return res.status(429).json({ success: false, error: { message: 'Zu viele Versuche. Bitte später erneut versuchen.' } });
+    }
+    bucket.count += 1;
+    attempts.set(key, bucket);
+    next();
+  };
+};
+
+const limitRegisterAttempts = createAuthRateLimiter(5, 15 * 60 * 1000);
+const limitLoginAttempts = createAuthRateLimiter(10, 15 * 60 * 1000);
+const limitPasswordAttempts = createAuthRateLimiter(5, 15 * 60 * 1000);
 
 const isAdmin = (user?: User) => Boolean(user && (user.role === 'ADMIN' || user.roles?.includes('ADMIN')));
 
@@ -326,58 +351,54 @@ apiRouter.post('/database/migrate', requireRole('ADMIN'), async (req: Authentica
 // Session Check Endpoint
 apiRouter.get('/auth/me', (req: AuthenticatedRequest, res: Response) => {
   if (req.user) {
-    res.json({
+    return res.json({
       success: true,
       authenticated: true,
       user: req.user,
       data: req.user,
     });
-  } else {
-    res.json({
-      success: true,
-      authenticated: false,
-      user: null,
-      data: null,
-    });
   }
+  return res.status(401).json({ success: false, authenticated: false, user: null, data: null });
 });
 
 // User Registration
-apiRouter.post('/auth/register', async (req: AuthenticatedRequest, res: Response) => {
-  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+apiRouter.post('/auth/register', limitRegisterAttempts, async (req: AuthenticatedRequest, res: Response) => {
+  const ip = req.socket.remoteAddress || 'unknown';
   const userAgent = req.headers['user-agent'] || 'Unknown';
 
-  const result = await authService.register(req.body, ip, userAgent);
-  if (!result.success || !result.user || !result.token) {
-    return res.status(400).json({
-      success: false,
-      authenticated: false,
-      error: { message: result.error || 'Registrierung fehlgeschlagen' },
+  try {
+    const result = await authService.register(req.body, ip, userAgent);
+    if (!result.success || !result.user || !result.token) {
+      return res.status(result.errorCode === 'CONFLICT' ? 409 : 400).json({
+        success: false,
+        authenticated: false,
+        error: { message: result.error || 'Registrierung fehlgeschlagen' },
+      });
+    }
+
+    setSessionCookie(res, result.token);
+    await auditRepository.log('USER_REGISTERED', result.user.id, result.user.username, 'Benutzerkonto registriert', ip)
+      .catch((error) => console.error('Registration audit write failed:', error));
+
+    return res.status(201).json({
+      success: true,
+      authenticated: true,
+      user: result.user,
+      data: result.user,
+      message: 'Registrierung erfolgreich',
     });
+  } catch (error) {
+    const code = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : '';
+    if (code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ success: false, error: { message: 'Benutzername oder E-Mail-Adresse ist bereits vergeben.' } });
+    }
+    throw error;
   }
-
-  setSessionCookie(res, result.token);
-  await auditRepository.log(
-    'USER_REGISTER',
-    result.user.id,
-    result.user.username,
-    `Neues Benutzerkonto registriert: ${result.user.email}`,
-    ip
-  );
-
-  res.status(201).json({
-    success: true,
-    authenticated: true,
-    user: result.user,
-    data: result.user,
-    token: result.token,
-    message: 'Registrierung erfolgreich',
-  });
 });
 
 // User Login
-apiRouter.post('/auth/login', async (req: AuthenticatedRequest, res: Response) => {
-  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+apiRouter.post('/auth/login', limitLoginAttempts, async (req: AuthenticatedRequest, res: Response) => {
+  const ip = req.socket.remoteAddress || 'unknown';
   const userAgent = req.headers['user-agent'] || 'Unknown';
 
   const result = await authService.login(req.body, ip, userAgent);
@@ -385,10 +406,10 @@ apiRouter.post('/auth/login', async (req: AuthenticatedRequest, res: Response) =
     await auditRepository.log(
       'AUTH_FAILED',
       'anonymous',
-      req.body.email || 'unknown',
-      `Fehlgeschlagener Anmeldeversuch für ${req.body.email}`,
+      'anonymous',
+      'Fehlgeschlagener Anmeldeversuch',
       ip
-    );
+    ).catch((error) => console.error('Failed-login audit write failed:', error));
     return res.status(401).json({
       success: false,
       authenticated: false,
@@ -397,20 +418,14 @@ apiRouter.post('/auth/login', async (req: AuthenticatedRequest, res: Response) =
   }
 
   setSessionCookie(res, result.token);
-  await auditRepository.log(
-    'USER_LOGIN',
-    result.user.id,
-    result.user.username,
-    `Erfolgreiche Anmeldung von ${ip}`,
-    ip
-  );
+  await auditRepository.log('USER_LOGIN', result.user.id, result.user.username, 'Erfolgreiche Anmeldung', ip)
+    .catch((error) => console.error('Login audit write failed:', error));
 
-  res.json({
+  return res.json({
     success: true,
     authenticated: true,
     user: result.user,
     data: result.user,
-    token: result.token,
     message: 'Erfolgreich angemeldet',
   });
 });
@@ -423,13 +438,32 @@ apiRouter.post('/auth/logout', async (req: AuthenticatedRequest, res: Response) 
   }
 
   clearSessionCookie(res);
-  await logAudit('USER_LOGOUT', 'Benutzer hat sich abgemeldet', req);
+  if (req.user) {
+    await auditRepository.log('USER_LOGOUT', req.user.id, req.user.username, 'Benutzer hat sich abgemeldet', req.socket.remoteAddress || 'unknown')
+      .catch((error) => console.error('Logout audit write failed:', error));
+  }
 
   res.json({
     success: true,
     authenticated: false,
     message: 'Erfolgreich abgemeldet',
   });
+});
+
+apiRouter.post('/auth/change-password', requireAuth, limitPasswordAttempts, async (req: AuthenticatedRequest, res: Response) => {
+  const { currentPassword, newPassword } = req.body;
+  const result = await authService.changePassword(
+    req.user!.id,
+    typeof currentPassword === 'string' ? currentPassword : '',
+    typeof newPassword === 'string' ? newPassword : '',
+    req.sessionToken || ''
+  );
+  if (!result.success) {
+    return res.status(400).json({ success: false, error: { message: result.error || 'Passwort konnte nicht geändert werden.' } });
+  }
+  await auditRepository.log('PASSWORD_CHANGED', req.user!.id, req.user!.username, 'Passwort geändert; andere Sessions widerrufen', req.socket.remoteAddress || 'unknown')
+    .catch((error) => console.error('Password-change audit write failed:', error));
+  return res.json({ success: true, authenticated: true, user: result.user });
 });
 
 apiRouter.post('/auth/switch-role', (_req: Request, res: Response) => {
@@ -441,26 +475,34 @@ apiRouter.post('/auth/switch-role', (_req: Request, res: Response) => {
 
 // Update Profile
 apiRouter.put('/users/me', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
-  const userId = req.user!.id;
-  const { displayName, bio, avatar, skills, technologies, githubUrl, websiteUrl } = req.body;
+  const input = req.body as Record<string, unknown>;
+  const validTextArray = (value: unknown) => value === undefined ||
+    (Array.isArray(value) && value.length <= 50 && value.every((item) => typeof item === 'string' && item.trim().length > 0 && item.length <= 80));
+  if (input.displayName !== undefined && (typeof input.displayName !== 'string' || !input.displayName.trim() || input.displayName.length > 100)) {
+    return res.status(400).json({ success: false, error: { message: 'Anzeigename ist ungültig.' } });
+  }
+  if (input.bio !== undefined && (typeof input.bio !== 'string' || input.bio.length > 2000)) {
+    return res.status(400).json({ success: false, error: { message: 'Biografie ist zu lang.' } });
+  }
+  if (!validUrl(input.avatar, true) || !validUrl(input.githubUrl) || !validUrl(input.websiteUrl)) {
+    return res.status(400).json({ success: false, error: { message: 'Profil-URLs sind ungültig.' } });
+  }
+  if (!validTextArray(input.skills) || !validTextArray(input.technologies)) {
+    return res.status(400).json({ success: false, error: { message: 'Skills oder Technologien sind ungültig.' } });
+  }
 
-  const updated = await userRepository.updateProfile(userId, {
-    displayName,
-    bio,
-    avatar,
-    skills,
-    technologies,
-    githubUrl,
-    websiteUrl,
+  const updated = await userRepository.updateProfile(req.user!.id, {
+    displayName: input.displayName as string | undefined,
+    bio: input.bio as string | undefined,
+    avatar: input.avatar as string | undefined,
+    skills: input.skills as string[] | undefined,
+    technologies: input.technologies as string[] | undefined,
+    githubUrl: input.githubUrl as string | undefined,
+    websiteUrl: input.websiteUrl as string | undefined,
   });
-
-  await logAudit('UPDATE_PROFILE', 'Benutzerprofil aktualisiert', req);
-  res.json({
-    success: true,
-    user: updated,
-    data: updated,
-    message: 'Profil erfolgreich gespeichert',
-  });
+  if (!updated) return res.status(404).json({ success: false, error: { message: 'Benutzer nicht gefunden.' } });
+  await logAudit('PROFILE_UPDATED', 'Benutzerprofil aktualisiert', req);
+  return res.json({ success: true, user: updated, data: updated, message: 'Profil erfolgreich gespeichert' });
 });
 
 // Public User Profile
@@ -469,7 +511,20 @@ apiRouter.get('/users/:username', async (req: Request, res: Response) => {
   if (!user) {
     return res.status(404).json({ success: false, error: { message: 'Benutzer nicht gefunden' } });
   }
-  res.json({ success: true, data: authService.sanitizeUser(user) });
+  const profile: PublicProfile = {
+    id: user.id,
+    username: user.username,
+    displayName: user.displayName,
+    avatar: user.avatar,
+    bio: user.bio,
+    skills: user.skills,
+    technologies: user.technologies,
+    badges: user.badges,
+    githubUrl: user.githubUrl,
+    websiteUrl: user.websiteUrl,
+    createdAt: user.createdAt,
+  };
+  return res.json({ success: true, data: profile });
 });
 
 // -------------------------------------------------------------
@@ -1092,7 +1147,7 @@ apiRouter.post(
   '/media/upload',
   requireRole('CREATOR', 'ADMIN'),
   (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-    mediaStorage.upload.single('file')(req, res, (error) => {
+    mediaStorage.uploadSingle('file')(req, res, (error) => {
       if (error) {
         const status = error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
         return res.status(status).json({ success: false, error: { message: 'Datei fehlt, ist zu groß oder hat einen nicht unterstützten Typ.' } });
@@ -1452,9 +1507,14 @@ apiRouter.get('/admin/users', requireRole('ADMIN'), async (req: AuthenticatedReq
 });
 
 apiRouter.patch('/admin/users/:id/role', requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
+  const allowedRoles = ['GUEST', 'USER', 'CREATOR', 'MODERATOR', 'ADMIN'];
+  if (typeof req.body.role !== 'string' || !allowedRoles.includes(req.body.role)) {
+    return res.status(400).json({ success: false, error: { message: 'Ungültige Rolle.' } });
+  }
   const updated = await userRepository.updateRole(req.params.id, req.body.role);
-  await logAudit('USER_ROLE_CHANGED', `Rolle von ${req.params.id} geändert auf ${req.body.role}`, req);
-  res.json({ success: true, data: updated ? authService.sanitizeUser(updated) : null });
+  if (!updated) return res.status(404).json({ success: false, error: { message: 'Benutzer nicht gefunden.' } });
+  await logAudit('ROLE_CHANGED', `Rolle von ${req.params.id} geändert`, req);
+  return res.json({ success: true, data: authService.sanitizeUser(updated) });
 });
 
 apiRouter.patch('/admin/users/:id/status', requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response) => {

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
-import { User, Project } from '../types/platform';
+import { PublicProfile, Project } from '../types/platform';
 import { ProfileEditModal } from '../components/ProfileEditModal';
 import {
   User as UserIcon,
@@ -23,18 +23,26 @@ interface ProfilePageProps {
 }
 
 export const ProfilePage: React.FC<ProfilePageProps> = ({
-  username = 'feligor08',
+  username,
   onNavigateToProject,
 }) => {
   const { currentUser } = useAuth();
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<PublicProfile | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
 
+  const targetUsername = username || currentUser?.username;
+
   const fetchProfile = () => {
+    if (!targetUsername) {
+      setUser(null);
+      setProjects([]);
+      setIsLoading(false);
+      return;
+    }
     setIsLoading(true);
-    Promise.all([api.getUserByUsername(username), api.getProjects()])
+    Promise.all([api.getUserByUsername(targetUsername), api.getProjects()])
       .then(([userData, projectsData]) => {
         setUser(userData);
         setProjects(projectsData.filter((p) => p.authorId === userData.id));
@@ -45,9 +53,9 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
 
   useEffect(() => {
     fetchProfile();
-  }, [username]);
+  }, [targetUsername]);
 
-  if (isLoading || !user) {
+  if (isLoading) {
     return (
       <div className="py-24 text-center space-y-2">
         <div className="w-8 h-8 rounded-full border-2 border-white border-t-transparent animate-spin mx-auto" />
@@ -56,7 +64,17 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
     );
   }
 
-  const isOwnProfile = currentUser && (currentUser.username === user.username || currentUser.id === user.id);
+  if (!user) {
+    return (
+      <div className="max-w-2xl mx-auto py-24 px-4 text-center space-y-3">
+        <UserIcon className="w-10 h-10 mx-auto text-zinc-500" />
+        <h1 className="text-lg font-semibold text-white">Profil nicht gefunden</h1>
+        <p className="text-xs text-zinc-400">Melde dich an oder öffne ein Profil über seinen Benutzernamen.</p>
+      </div>
+    );
+  }
+
+  const isOwnProfile = currentUser?.username === user.username;
 
   return (
     <div className="max-w-5xl mx-auto py-8 px-4 sm:px-6 space-y-8 animate-in fade-in duration-150">
@@ -72,14 +90,6 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
             <div className="space-y-1.5">
               <div className="flex flex-wrap items-center gap-2">
                 <h1 className="text-2xl font-bold text-white">{user.displayName}</h1>
-                <span className="px-2 py-0.5 text-2xs font-mono font-bold bg-white/10 border border-white/20 text-white rounded">
-                  {user.role}
-                </span>
-                {user.status === 'ACTIVE' && (
-                  <span className="px-2 py-0.5 text-3xs font-mono font-semibold bg-emerald-950/60 border border-emerald-800/40 text-emerald-400 rounded">
-                    AKTIV
-                  </span>
-                )}
               </div>
               <p className="text-xs text-zinc-400">@{user.username}</p>
               <p className="text-xs text-zinc-300 leading-relaxed max-w-xl pt-1">{user.bio}</p>

@@ -28,15 +28,17 @@ export const AdminPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [migrationStatus, setMigrationStatus] = useState<string | null>(null);
   const [isMigrating, setIsMigrating] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const loadAdminData = async () => {
     setIsLoading(true);
+    setLoadError(null);
     try {
       const [s, u, l, h] = await Promise.all([
-        api.getAdminStats().catch(() => null),
-        api.getAdminUsers().catch(() => []),
-        api.getAdminAuditLogs().catch(() => []),
-        api.getSystemHealth().catch(() => null),
+        api.getAdminStats(),
+        api.getAdminUsers(),
+        api.getAdminAuditLogs(),
+        api.getSystemHealth(),
       ]);
       setStats(s);
       setUsers(u);
@@ -44,6 +46,11 @@ export const AdminPage: React.FC = () => {
       setSystemHealth(h);
     } catch (e) {
       console.error('Failed to load admin data:', e);
+      setLoadError(e instanceof Error ? e.message : 'Admin-Daten konnten nicht geladen werden.');
+      setStats(null);
+      setUsers([]);
+      setAuditLogs([]);
+      setSystemHealth(null);
     } finally {
       setIsLoading(false);
     }
@@ -119,6 +126,12 @@ export const AdminPage: React.FC = () => {
         </button>
       </div>
 
+      {loadError && (
+        <div role="alert" className="p-3 border border-rose-800/50 bg-rose-950/30 text-rose-200 text-xs rounded-lg">
+          {loadError}
+        </div>
+      )}
+
       {/* KPI Stats Grid */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <div className="p-4 glass-1 rounded-xl border border-white/10 space-y-1">
@@ -130,31 +143,31 @@ export const AdminPage: React.FC = () => {
               }`}
             ></span>
             <span className="font-mono text-sm font-bold text-white">
-              {isDbConnected ? 'MARIADB CONNECTED' : 'HIGH-RESILIENT MODE'}
+              {isDbConnected ? 'MARIADB CONNECTED' : 'MARIADB UNAVAILABLE'}
             </span>
           </div>
           <span className="text-2xs text-zinc-500 block">
             {isDbConnected
               ? `${systemHealth?.database?.latencyMs || 0}ms Latenz`
-              : 'Auto-Fallback aktiv'}
+              : 'Keine Datenbankdaten verfügbar'}
           </span>
         </div>
 
         <div className="p-4 glass-1 rounded-xl border border-white/10 space-y-1">
           <span className="text-2xs text-zinc-400 font-medium block">Registrierte Benutzer</span>
-          <span className="font-mono text-xl font-bold text-white block mt-1">{stats?.totalUsers || users.length}</span>
+          <span className="font-mono text-xl font-bold text-white block mt-1">{stats?.totalUsers ?? users.length}</span>
           <span className="text-2xs text-zinc-500">RBAC geschützt</span>
         </div>
 
         <div className="p-4 glass-1 rounded-xl border border-white/10 space-y-1">
           <span className="text-2xs text-zinc-400 font-medium block">Portfolio Systeme</span>
-          <span className="font-mono text-xl font-bold text-white block mt-1">{stats?.totalProjects || 3}</span>
+          <span className="font-mono text-xl font-bold text-white block mt-1">{stats?.totalProjects ?? 0}</span>
           <span className="text-2xs text-zinc-500">Live Case Studies</span>
         </div>
 
         <div className="p-4 glass-1 rounded-xl border border-white/10 space-y-1">
           <span className="text-2xs text-zinc-400 font-medium block">Store Bestellungen</span>
-          <span className="font-mono text-xl font-bold text-white block mt-1">{stats?.totalOrders || 0}</span>
+          <span className="font-mono text-xl font-bold text-white block mt-1">{stats?.totalOrders ?? 0}</span>
           <span className="text-2xs text-zinc-500">Digitale Tokens aktiv</span>
         </div>
 

@@ -44,7 +44,7 @@ cp .env.example .env
 | Variable | Beschreibung | Standard |
 |---|---|---|
 | `PORT` | Express Server Port | `3000` |
-| `DB_HOST` | Hostname/IP des MariaDB Servers (z.B. Tailscale IP) | `127.0.0.1` |
+| `DB_HOST` | Hostname/IP des MariaDB Servers (z.B. Tailscale IP) | erforderlich |
 | `DB_PORT` | MariaDB Port | `3306` |
 | `DB_NAME` | Datenbankname | `nexus_code_play` |
 | `DB_USER` | Dedizierter Anwendungsbenutzer (**nicht** root!) | `nexus_app` |
@@ -52,6 +52,9 @@ cp .env.example .env
 | `DB_POOL_MIN` | Minimale Poolverbindungen | `2` |
 | `DB_POOL_MAX` | Maximale Poolverbindungen | `10` |
 | `GEMINI_API_KEY` | Google Gemini API Key für serverseitige KI-Routen | `MY_GEMINI_API_KEY` |
+| `MEDIA_STORAGE_PATH` | Privater, nicht statisch ausgelieferter Datei-Storage | `./var/media` |
+
+Ohne `DB_HOST` verbindet sich der Server nicht automatisch mit localhost; datenbankgestützte API-Aufrufe melden `503`.
 
 ---
 
@@ -81,16 +84,32 @@ FLUSH PRIVILEGES;
 ## 4. Datenbank-Migrationen
 
 Migrationsdateien liegen unter `server/migrations/`:
-- `001_initial_schema.sql`: Normalisierte Tabellen für Users, Roles, User_Roles, Projects, Technologies, Products, Orders, Carts, Community, Notifications, AI_Conversations, API_Endpoints_Log und Audit_Logs.
-- `002_seed_initial_data.sql`: Seed für Standardrollen, Entwickler-Profil (@feligor08), echte Projekt-Blueprints und Produkte.
+- `001_initial_schema.sql`: Grundschema für Plattformdaten.
+- `002_seed_initial_data.sql`: Legacy-Migration mit Beispielkonten und Showcase-Inhalten. Wird vom automatischen Runner zurückgestellt.
+- `004_remove_demo_data.sql`: Legacy-Cleanup mit pauschalen Löschungen. Wird vom automatischen Runner zurückgestellt und darf nicht manuell auf Datenbanken mit echten Daten ausgeführt werden.
+- `005_content_management.sql`, `006_project_cms_fields.sql`, `007_product_media_foundation.sql`: CMS-, Medien- und Produktfelder.
+- `008_system_reference_data.sql`: Idempotente Rollen und Produktkategorien ohne Benutzer oder Demo-Inhalte.
+- `009_user_profile_fields.sql`: Skills und Technologien für Benutzerprofile.
 
-### Migration ausführen:
-1. **Automatisch beim Serverstart**: Wenn MariaDB online ist, führt der Server ausstehende Migrationen automatisch via Transaktion aus.
-2. **Über die Web-Administration**: Im Admin Panel unter *Infrastruktur & MariaDB* auf *"Schema Migrationen anwenden"* klicken (`POST /api/database/migrate`).
-3. **Manuell via CLI**:
+### Migrationen
+Bei erreichbarer MariaDB führt der Server sichere, ausstehende Migrationen automatisch aus. `002_seed_initial_data.sql` und `004_remove_demo_data.sql` werden zurückgestellt und im Migrationsergebnis aufgeführt, bis sie ausdrücklich geprüft wurden. Migrationen nicht manuell pauschal gegen eine bestehende Datenbank ausführen.
+
+### Media Storage
+`POST /api/media/upload` nimmt authentifizierte Multipart-Dateien entgegen. Dateien liegen unter `MEDIA_STORAGE_PATH` mit servergenerierten UUID-Keys und werden nicht als statische Dateien ausgeliefert. Endung, MIME-Typ und Datei-Signatur werden geprüft; Cover-/Galerie-Referenzen verweisen auf Media-IDs. Bilder sind öffentlich nur sichtbar, wenn ein veröffentlichtes öffentliches Projekt oder Produkt sie referenziert. Download-Dateien benötigen ein gültiges, einmaliges Entitlement-Token.
+
+### Store & Zahlung
+Der Warenkorb ist benutzergebunden und wird in MariaDB gespeichert. Der Checkout ist mit `501` deaktiviert, solange kein echter Payment-Provider integriert ist. Es werden keine bezahlten Bestellungen oder Download-Berechtigungen simuliert. Kostenlose Claims sind nur für veröffentlichte Produkte mit hinterlegter Datei möglich.
+
+### Authentication
+Die API ist zusätzlich unter `/api/v1/*` erreichbar. Register, Login, Sessionprüfung und Logout verwenden ausschließlich das HttpOnly-Cookie `nexus_session`; in MariaDB wird nur der Session-Token-Hash gespeichert. `GET /api/v1/auth/me` antwortet mit `401`, wenn keine gültige Session besteht. Passwörter werden mit bcrypt gehasht; neue Accounts erhalten serverseitig die Rolle `USER`.
+
+Einen initialen Administrator richtet ausschließlich der lokale Befehl `npm run admin:bootstrap` ein. Er benötigt eine erreichbare MariaDB, führt keine Migration aus, erlaubt nur einen Admin und verlangt bei vorhandenen Accounts eine explizite Bestätigung. Es existiert keine öffentliche Bootstrap-Route.
+
+Verfügbare Auth-Endpunkte: `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `GET /api/v1/auth/me`, `POST /api/v1/auth/logout` und `POST /api/v1/auth/change-password`.
+
+Für eine neue, leere Entwicklungsdatenbank kann das Grundschema manuell angelegt werden:
 ```bash
 mysql -h 127.0.0.1 -P 3306 -u nexus_app -p nexus_code_play < server/migrations/001_initial_schema.sql
-mysql -h 127.0.0.1 -P 3306 -u nexus_app -p nexus_code_play < server/migrations/002_seed_initial_data.sql
 ```
 
 ---
@@ -112,7 +131,7 @@ Alle Endpunkte sind sowohl unter `/api/*` als auch versioniert unter `/api/v1/*`
 ### Store & Checkout
 - `GET /api/products`: Digitale Vorlagen, Docker Bundles & 3D STL Modelle.
 - `GET /api/cart`: Persistenter Benutzer-Warenkorb.
-- `POST /api/checkout`: Transaktionsgesicherter Checkout (Order & Order Items Snapshot).
+- `POST /api/checkout`: Deaktiviert mit `501`, bis ein echter Payment-Provider eingerichtet ist.
 
 ### AI Workspace & Persistente Historie
 - `GET /api/ai/conversations`: Liste gespeicherter Chat-Sessions des Benutzers.

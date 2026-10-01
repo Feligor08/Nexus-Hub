@@ -110,9 +110,7 @@ export const ProductEditorModal: React.FC<ProductEditorModalProps> = ({
       setFileSize(initialProduct.fileSize || '15 MB');
       setVersion(initialProduct.version || '1.0.0');
       setLicense(initialProduct.license || 'MIT Open Source');
-      setCoverImage(
-        initialProduct.images?.[0] || '/src/assets/images/nexus_cyberpunk_banner_1790662130550.jpg'
-      );
+      setCoverImage(initialProduct.images?.[0] || '');
       setCoverMediaId(initialProduct.coverMediaId || initialProduct.mediaFileId || '');
       setGalleryMediaIds(initialProduct.galleryMediaIds || []);
       setDownloadMediaId(initialProduct.downloadMediaId || '');
@@ -140,7 +138,7 @@ export const ProductEditorModal: React.FC<ProductEditorModalProps> = ({
       setFileSize('12 MB');
       setVersion('1.0.0');
       setLicense('MIT Open Source');
-      setCoverImage('/src/assets/images/nexus_cyberpunk_banner_1790662130550.jpg');
+      setCoverImage('');
       setCoverMediaId('');
       setGalleryMediaIds([]);
       setDownloadMediaId('');
@@ -339,39 +337,21 @@ export const ProductEditorModal: React.FC<ProductEditorModalProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div className="space-y-1.5">
                   <label className="text-2xs font-mono uppercase text-zinc-400">Kategorie</label>
-                  <select
-                    value={category}
-                    onChange={(e) => setCategory(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-white/10 text-white focus:outline-none focus:border-white/30"
-                  >
-                    {PRODUCT_CATEGORIES.map((c) => (
-                      <option key={c} value={c} className="bg-zinc-900 text-white">
-                        {c}
-                      </option>
-                    ))}
+                  <select value={category} onChange={(e) => setCategory(e.target.value)} className="w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-white/10 text-white focus:outline-none focus:border-white/30">
+                    {PRODUCT_CATEGORIES.map((item) => <option key={item} value={item} className="bg-zinc-900 text-white">{item}</option>)}
                   </select>
                 </div>
-
                 {canPublish && <div className="space-y-1.5">
                   <label className="text-2xs font-mono uppercase text-zinc-400">Status</label>
-                  <select
-                    value={status}
-                    onChange={(e) => setStatus(e.target.value as ContentStatus)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-white/10 text-white focus:outline-none focus:border-white/30"
-                  >
-                    <option value="DRAFT">DRAFT (Entwurf - noch nicht im Store gelistet)</option>
-                    <option value="PUBLISHED">PUBLISHED (Öffentlich im Store kaufbar/claimbar)</option>
-                    <option value="ARCHIVED">ARCHIVED (Archiviert)</option>
+                  <select value={status} onChange={(e) => setStatus(e.target.value as ContentStatus)} className="w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-white/10 text-white focus:outline-none focus:border-white/30">
+                    <option value="DRAFT">DRAFT</option>
+                    <option value="PUBLISHED">PUBLISHED</option>
+                    <option value="ARCHIVED">ARCHIVED</option>
                   </select>
                 </div>}
-
                 {canPublish && <div className="space-y-1.5">
                   <label className="text-2xs font-mono uppercase text-zinc-400">Sichtbarkeit</label>
-                  <select
-                    value={visibility}
-                    onChange={(e) => setVisibility(e.target.value as any)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-white/10 text-white focus:outline-none focus:border-white/30"
-                  >
+                  <select value={visibility} onChange={(e) => setVisibility(e.target.value as 'PUBLIC' | 'PRIVATE')} className="w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-white/10 text-white focus:outline-none focus:border-white/30">
                     <option value="PUBLIC">Öffentlich</option>
                     <option value="PRIVATE">Privat</option>
                   </select>
@@ -462,7 +442,7 @@ export const ProductEditorModal: React.FC<ProductEditorModalProps> = ({
                   <label htmlFor="digital-check" className="cursor-pointer">
                     <span className="font-semibold text-white block">Digitales Download-Produkt</span>
                     <span className="text-2xs text-zinc-400 block">
-                      Liefert nach Kauf oder Claim automatisch einen serverseitig verifizierten Download-Token aus.
+                      Kostenlose Claims erhalten einen serverseitig geprüften Token. Bezahlte Bestellungen bleiben bis zur Payment-Integration deaktiviert.
                     </span>
                   </label>
                 </div>
@@ -512,10 +492,10 @@ export const ProductEditorModal: React.FC<ProductEditorModalProps> = ({
           {/* TAB 3: PRICING & LICENSE */}
           {activeTab === 'pricing' && (
             <div className="space-y-5">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div className="space-y-1.5">
                   <label className="text-2xs font-mono uppercase text-zinc-400">
-                    Preis in EUR (0 = Kostenlos)
+                    Preis (0 = Kostenlos)
                   </label>
                   <div className="relative">
                     <input
@@ -530,9 +510,18 @@ export const ProductEditorModal: React.FC<ProductEditorModalProps> = ({
                   </div>
                   {price === 0 && (
                     <span className="text-emerald-400 text-2xs font-mono block">
-                      ✓ Kostenloses Produkt: Wird mit direktem 1-Klick Claim ausgeliefert.
+                      Kostenlose Produkte können ohne Zahlung freigeschaltet werden.
                     </span>
                   )}
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-2xs font-mono uppercase text-zinc-400">Währung</label>
+                  <select value={currency} onChange={(e) => setCurrency(e.target.value)} className="w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-white/10 text-white">
+                    <option value="EUR">EUR</option>
+                    <option value="USD">USD</option>
+                    <option value="GBP">GBP</option>
+                  </select>
                 </div>
 
                 <div className="space-y-1.5">

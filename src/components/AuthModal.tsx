@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { X, LogIn, UserPlus, Eye, EyeOff, Sparkles, AlertCircle, CheckCircle2 } from 'lucide-react';
 
@@ -19,6 +19,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   // Form states
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -28,12 +29,24 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successNotice, setSuccessNotice] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    setMode(initialMode);
+    setError(null);
+    setSuccessNotice(null);
+    setConfirmPassword('');
+  }, [initialMode, isOpen]);
+
   if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setSuccessNotice(null);
+    if (mode === 'register' && password !== confirmPassword) {
+      setError('Die Passwörter stimmen nicht überein.');
+      return;
+    }
     setIsSubmitting(true);
 
     try {
@@ -189,7 +202,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
-                minLength={6}
+                  minLength={mode === 'register' ? 12 : undefined}
+                  autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
                 className="w-full px-3.5 py-2.5 pr-10 bg-black/40 border border-white/10 rounded-xl text-xs font-mono text-white placeholder-zinc-500 focus:outline-none focus:border-white/40 focus:ring-1 focus:ring-white/20 transition-all"
               />
               <button
@@ -202,9 +216,27 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               </button>
             </div>
             {mode === 'register' && (
-              <span className="text-3xs text-zinc-500 mt-1 block">Mindestens 6 Zeichen.</span>
+              <span className="text-3xs text-zinc-500 mt-1 block">Mindestens 12 Zeichen.</span>
             )}
           </div>
+
+          {mode === 'register' && (
+            <div>
+              <label className="block text-2xs font-mono uppercase tracking-wider text-zinc-400 mb-1.5" htmlFor="auth-confirm-password">
+                Passwort bestätigen
+              </label>
+              <input
+                id="auth-confirm-password"
+                type={showPassword ? 'text' : 'password'}
+                required
+                minLength={12}
+                autoComplete="new-password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="w-full px-3.5 py-2.5 bg-black/40 border border-white/10 rounded-xl text-xs font-mono text-white placeholder-zinc-500 focus:outline-none focus:border-white/40"
+              />
+            </div>
+          )}
 
           <button
             type="submit"

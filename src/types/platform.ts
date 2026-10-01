@@ -19,6 +19,20 @@ export interface User {
   lastLoginAt?: string;
 }
 
+export interface PublicProfile {
+  id: string;
+  username: string;
+  displayName: string;
+  avatar: string;
+  bio: string;
+  skills: string[];
+  technologies: string[];
+  badges: string[];
+  githubUrl?: string;
+  websiteUrl?: string;
+  createdAt: string;
+}
+
 export interface Project {
   id: string;
   slug: string;

@@ -3,6 +3,15 @@ import { createHash, randomUUID } from 'crypto';
 import { executeQuery, getLastDatabaseStatus, withTransaction } from '../config/database';
 import { User, UserSession } from '../models/types';
 
+function parseStringArray(value: unknown): string[] {
+  if (value === null || value === undefined || value === '') return [];
+  const parsed: unknown = typeof value === 'string' ? JSON.parse(value) : value;
+  if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== 'string')) {
+    throw new Error('Ungültige Profildaten in der Datenbank.');
+  }
+  return parsed;
+}
+
 export class UserRepository {
   private requireDatabase(): void {
     if (!getLastDatabaseStatus().connected) {
@@ -26,8 +35,8 @@ export class UserRepository {
       roles: roles.length ? roles : [primaryRole],
       avatar: row.avatar_url || '',
       bio: row.bio || '',
-      skills: [],
-      technologies: [],
+      skills: parseStringArray(row.skills),
+      technologies: parseStringArray(row.technologies),
       badges: badgesRows.map((badgeRow) => badgeRow.badge),
       githubUrl: row.github_url,
       websiteUrl: row.website_url,
@@ -76,7 +85,7 @@ export class UserRepository {
     return { ...await this.mapUser(rows[0]), passwordHash: rows[0].password_hash || undefined };
   }
 
-  async createUser(data: {
+  async registerUser(data: {
     id: string;
     username: string;
     email: string;
@@ -84,11 +93,14 @@ export class UserRepository {
     displayName: string;
     avatarUrl?: string;
     bio?: string;
-  }): Promise<User> {
+  }, token: string, ipAddress?: string, userAgent?: string): Promise<User> {
     this.requireDatabase();
     const nowIso = new Date().toISOString();
     const initialRole = 'USER';
     const initialBadges = ['Community Member'];
+    const sessionId = `sess-${randomUUID()}`;
+    const tokenHash = this.hashToken(token);
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
     const newUser: User = {
       id: data.id,
@@ -117,6 +129,11 @@ export class UserRepository {
       for (const badge of initialBadges) {
         await connection.execute(`INSERT INTO user_badges (user_id, badge) VALUES (?, ?)`, [data.id, badge]);
       }
+      await connection.execute(
+        `INSERT INTO user_sessions (id, user_id, token_hash, ip_address, user_agent, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [sessionId, data.id, tokenHash, ipAddress || null, (userAgent || '').slice(0, 255), expiresAt]
+      );
     });
 
     return newUser;
@@ -131,6 +148,8 @@ export class UserRepository {
     if (data.avatar !== undefined) { fields.push('avatar_url = ?'); values.push(data.avatar); }
     if (data.githubUrl !== undefined) { fields.push('github_url = ?'); values.push(data.githubUrl); }
     if (data.websiteUrl !== undefined) { fields.push('website_url = ?'); values.push(data.websiteUrl); }
+    if (data.skills !== undefined) { fields.push('skills = ?'); values.push(JSON.stringify(data.skills)); }
+    if (data.technologies !== undefined) { fields.push('technologies = ?'); values.push(JSON.stringify(data.technologies)); }
     if (fields.length) {
           values.push(userId);
           await executeQuery(`UPDATE users SET ${fields.join(', ')}, updated_at = NOW() WHERE id = ?`, values as string[]);
@@ -141,6 +160,23 @@ export class UserRepository {
   async updateLastLogin(userId: string): Promise<void> {
     this.requireDatabase();
     await executeQuery(`UPDATE users SET last_login_at = NOW() WHERE id = ?`, [userId]);
+  }
+
+  async changePassword(userId: string, passwordHash: string, currentSessionToken: string): Promise<boolean> {
+    this.requireDatabase();
+    const currentTokenHash = this.hashToken(currentSessionToken);
+    return withTransaction(async (connection) => {
+      const [result] = await connection.execute(
+        `UPDATE users SET password_hash = ?, updated_at = NOW() WHERE id = ?`,
+        [passwordHash, userId]
+      );
+      if ((result as { affectedRows: number }).affectedRows === 0) return false;
+      await connection.execute(
+        `DELETE FROM user_sessions WHERE user_id = ? AND token_hash <> ?`,
+        [userId, currentTokenHash]
+      );
+      return true;
+    });
   }
 
   async getAllUsers(): Promise<User[]> {
@@ -191,7 +227,6 @@ export class UserRepository {
       id,
       userId,
       tokenHash,
-      token,
       ipAddress,
       userAgent,
       expiresAt,

@@ -18,11 +18,24 @@ export interface User {
   passwordHash?: string;
 }
 
+export interface PublicProfile {
+  id: string;
+  username: string;
+  displayName: string;
+  avatar: string;
+  bio: string;
+  skills: string[];
+  technologies: string[];
+  badges: string[];
+  githubUrl?: string;
+  websiteUrl?: string;
+  createdAt: string;
+}
+
 export interface UserSession {
   id: string;
   userId: string;
   tokenHash: string;
-  token?: string;
   ipAddress?: string;
   userAgent?: string;
   expiresAt: string;

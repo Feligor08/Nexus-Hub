@@ -30,23 +30,9 @@ export function parseCookies(cookieHeader?: string): Record<string, string> {
   return cookies;
 }
 
-/**
- * Extracts session token from cookies or Authorization header
- */
+/** Extract the server-managed HttpOnly session cookie. */
 export function extractToken(req: Request): string | null {
-  // 1. Check Authorization Bearer header
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    return authHeader.substring(7).trim();
-  }
-
-  // 2. Check custom x-session-token header
-  const customHeader = req.headers['x-session-token'];
-  if (typeof customHeader === 'string' && customHeader.trim()) {
-    return customHeader.trim();
-  }
-
-  // 3. Check HttpOnly Cookie
+  // Authentication tokens are accepted only from the HttpOnly cookie.
   const cookies = parseCookies(req.headers.cookie);
   if (cookies.nexus_session) {
     return cookies.nexus_session;
@@ -122,7 +108,7 @@ export const requireRole = (...roles: string[]) => {
     }
 
     const userRoles = req.user.roles || [req.user.role];
-    const hasRole = roles.some((r) => userRoles.includes(r as any) || req.user?.role === r);
+    const hasRole = roles.some((role) => userRoles.includes(role) || req.user?.role === role);
 
     if (!hasRole) {
       return res.status(403).json({

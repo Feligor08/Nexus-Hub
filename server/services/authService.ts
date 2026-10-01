@@ -20,6 +20,7 @@ export interface AuthResult {
   user?: User;
   token?: string;
   error?: string;
+  errorCode?: 'VALIDATION' | 'CONFLICT';
 }
 
 export class AuthService {
@@ -44,11 +45,12 @@ export class AuthService {
   /**
    * Register a new user
    */
-  async register(dto: RegisterDTO, clientIp?: string, userAgent?: string): Promise<AuthResult> {
-    const username = (dto.username || '').trim();
-    const email = (dto.email || '').trim().toLowerCase();
-    const password = dto.password || '';
-    const displayName = (dto.displayName || '').trim() || username;
+  async register(input: RegisterDTO, clientIp?: string, userAgent?: string): Promise<AuthResult> {
+    const dto = input && typeof input === 'object' ? input : {} as RegisterDTO;
+    const username = typeof dto.username === 'string' ? dto.username.trim() : '';
+    const email = typeof dto.email === 'string' ? dto.email.trim().toLowerCase() : '';
+    const password = typeof dto.password === 'string' ? dto.password : '';
+    const displayName = typeof dto.displayName === 'string' ? dto.displayName.trim() : '';
 
     // 1. Validation
     if (!username || username.length < 3 || username.length > 30) {
@@ -67,8 +69,12 @@ export class AuthService {
       };
     }
 
+    if (!displayName || displayName.length > 100) {
+      return { success: false, authenticated: false, errorCode: 'VALIDATION', error: 'Der Anzeigename muss zwischen 1 und 100 Zeichen lang sein.' };
+    }
+
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!email || !emailRegex.test(email)) {
+    if (!email || email.length > 191 || !emailRegex.test(email)) {
       return {
         success: false,
         authenticated: false,
@@ -76,11 +82,11 @@ export class AuthService {
       };
     }
 
-    if (!password || password.length < 6) {
+    if (!password || password.length < 12 || Buffer.byteLength(password, 'utf8') > 72) {
       return {
         success: false,
         authenticated: false,
-        error: 'Das Passwort muss mindestens 6 Zeichen lang sein.',
+        error: 'Das Passwort muss mindestens 12 Zeichen lang sein und darf höchstens 72 UTF-8-Bytes umfassen.',
       };
     }
 
@@ -90,6 +96,7 @@ export class AuthService {
       return {
         success: false,
         authenticated: false,
+        errorCode: 'CONFLICT',
         error: 'Dieser Benutzername ist bereits vergeben.',
       };
     }
@@ -99,26 +106,24 @@ export class AuthService {
       return {
         success: false,
         authenticated: false,
+        errorCode: 'CONFLICT',
         error: 'Ein Konto mit dieser E-Mail-Adresse existiert bereits.',
       };
     }
 
     // 3. Password Hashing (bcrypt with salt rounds)
     const passwordHash = await userRepository.hashPassword(password);
-    const userId = `usr-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+    const userId = `usr-${crypto.randomUUID()}`;
+    const token = this.generateSessionToken();
 
-    // 4. Create User in MariaDB and Store
-    const createdUser = await userRepository.createUser({
+    // User, standard role, badge and initial session commit atomically.
+    const createdUser = await userRepository.registerUser({
       id: userId,
       username,
       email,
       passwordHash,
       displayName,
-    });
-
-    // 5. Create Session
-    const token = this.generateSessionToken();
-    await userRepository.createSession(createdUser.id, token, clientIp, userAgent);
+    }, token, clientIp, userAgent);
 
     return {
       success: true,
@@ -131,20 +136,20 @@ export class AuthService {
   /**
    * Log in an existing user
    */
-  async login(dto: LoginDTO, clientIp?: string, userAgent?: string): Promise<AuthResult> {
-    const identifier = (dto.email || '').trim();
-    const password = dto.password || '';
+  async login(input: LoginDTO, clientIp?: string, userAgent?: string): Promise<AuthResult> {
+    const dto = input && typeof input === 'object' ? input : {} as LoginDTO;
+    const rawIdentifier = typeof dto.email === 'string' ? dto.email.trim() : '';
+    const identifier = rawIdentifier.includes('@') ? rawIdentifier.toLowerCase() : rawIdentifier;
+    const password = typeof dto.password === 'string' ? dto.password : '';
+    const genericAuthError = 'Ungültige Anmeldedaten.';
 
     if (!identifier || !password) {
       return {
         success: false,
         authenticated: false,
-        error: 'Bitte E-Mail/Benutzername und Passwort eingeben.',
+        error: genericAuthError,
       };
     }
-
-    // Generic error message for security (Section 7)
-    const genericAuthError = 'Ungültige Anmeldedaten. Bitte überprüfe deine Eingaben.';
 
     const userWithCreds = await userRepository.findWithCredentials(identifier);
     if (!userWithCreds) {
@@ -159,7 +164,7 @@ export class AuthService {
       return {
         success: false,
         authenticated: false,
-        error: 'Dieses Konto wurde vorübergehend gesperrt. Bitte wende dich an den Support.',
+        error: genericAuthError,
       };
     }
 
@@ -209,6 +214,27 @@ export class AuthService {
     if (!token) return true;
     await userRepository.deleteSession(token);
     return true;
+  }
+
+  async changePassword(userId: string, currentPassword: string, newPassword: string, currentSessionToken: string): Promise<AuthResult> {
+    const genericError = 'Das aktuelle Passwort ist ungültig.';
+    if (!currentPassword || !newPassword) {
+      return { success: false, authenticated: true, error: 'Beide Passwortfelder sind erforderlich.' };
+    }
+    if (newPassword.length < 12 || Buffer.byteLength(newPassword, 'utf8') > 72) {
+      return { success: false, authenticated: true, error: 'Das neue Passwort muss mindestens 12 Zeichen lang sein und darf höchstens 72 UTF-8-Bytes umfassen.' };
+    }
+
+    const user = await userRepository.findById(userId);
+    const credentials = user ? await userRepository.findWithCredentials(user.email) : null;
+    if (!user || !credentials || !(await userRepository.verifyPassword(currentPassword, credentials.passwordHash || ''))) {
+      return { success: false, authenticated: true, error: genericError };
+    }
+
+    const passwordHash = await userRepository.hashPassword(newPassword);
+    const changed = await userRepository.changePassword(userId, passwordHash, currentSessionToken);
+    if (!changed) return { success: false, authenticated: true, error: 'Benutzer nicht gefunden.' };
+    return { success: true, authenticated: true, user: this.sanitizeUser(user) };
   }
 }
 

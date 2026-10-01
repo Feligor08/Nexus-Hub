@@ -69,8 +69,12 @@ export const Navbar: React.FC<NavbarProps> = ({ currentView, onNavigate, onOpenS
 
   const handleLogout = async () => {
     setIsUserMenuOpen(false);
-    await logout();
-    onNavigate('home');
+    try {
+      await logout();
+      onNavigate('home');
+    } catch (error) {
+      console.error('Logout failed:', error);
+    }
   };
 
   return (

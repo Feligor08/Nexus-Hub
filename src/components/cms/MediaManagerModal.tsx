@@ -188,6 +188,12 @@ export const MediaManagerModal: React.FC<MediaManagerModalProps> = ({
           </form>
         )}
 
+        {errorMsg && (
+          <div role="alert" className="mx-4 mt-3 p-3 bg-rose-950/40 border border-rose-800/50 rounded-lg text-xs text-rose-200">
+            {errorMsg}
+          </div>
+        )}
+
         {/* Toolbar: Category Filters and Search */}
         <div className="p-4 border-b border-white/10 bg-black/20 flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none">

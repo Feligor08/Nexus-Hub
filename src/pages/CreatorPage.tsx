@@ -59,6 +59,7 @@ export const CreatorPage: React.FC<CreatorPageProps> = ({ onNavigate }) => {
   const [mediaList, setMediaList] = useState<MediaFile[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Modals
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
@@ -71,35 +72,17 @@ export const CreatorPage: React.FC<CreatorPageProps> = ({ onNavigate }) => {
 
   const loadCmsData = async () => {
     setIsLoading(true);
+    setLoadError(null);
     try {
       const [cmsStats, media] = await Promise.all([
-        api.getCmsStats().catch(() => null),
-        api.getMedia(true).catch(() => []),
+        api.getCmsStats(),
+        api.getMedia(true),
       ]);
-
-      if (cmsStats) {
-        setStats(cmsStats);
-      } else {
-        // Fallback: load directly
-        const [projs, prods] = await Promise.all([
-          api.getProjects(undefined, undefined),
-          api.getProducts(undefined, undefined, true),
-        ]);
-        setStats({
-          totalProjects: projs.length,
-          totalProducts: prods.length,
-          totalPosts: 0,
-          totalMedia: media.length,
-          draftsCount: projs.filter((p) => p.status === 'DRAFT').length + prods.filter((p) => p.status === 'DRAFT').length,
-          publishedCount: projs.filter((p) => p.status === 'PUBLISHED').length + prods.filter((p) => p.status === 'PUBLISHED').length,
-          archivedCount: projs.filter((p) => p.status === 'ARCHIVED').length + prods.filter((p) => p.status === 'ARCHIVED').length,
-          projects: projs,
-          products: prods,
-        });
-      }
+      setStats(cmsStats);
       setMediaList(media);
     } catch (err: any) {
       console.error('Failed to load CMS data:', err);
+      setLoadError(err.message || 'CMS-Daten konnten nicht aus MariaDB geladen werden.');
     } finally {
       setIsLoading(false);
     }
@@ -210,6 +193,12 @@ export const CreatorPage: React.FC<CreatorPageProps> = ({ onNavigate }) => {
           <button onClick={() => setFeedbackMsg(null)} className="text-2xs text-emerald-400 hover:text-white">
             Ausblenden
           </button>
+        </div>
+      )}
+
+      {loadError && (
+        <div role="alert" className="p-3.5 bg-rose-950/40 border border-rose-800/50 rounded-xl text-xs text-rose-200">
+          {loadError}
         </div>
       )}
 
