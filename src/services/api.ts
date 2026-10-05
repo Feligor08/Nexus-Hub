@@ -1,6 +1,5 @@
 import {
   User,
-  PublicProfile,
   Project,
   Product,
   Order,
@@ -14,14 +13,49 @@ import {
   DownloadEntitlement,
 } from '../types/platform';
 
+let memorySessionToken: string | null = null;
+
+// Read initial token from sessionStorage (safe tab session only, never in localStorage per security rule)
+try {
+  memorySessionToken = sessionStorage.getItem('nexus_session_token');
+} catch {
+  // Ignore sessionStorage restriction if any
+}
+
+export function setSessionToken(token: string | null) {
+  memorySessionToken = token;
+  try {
+    if (token) {
+      sessionStorage.setItem('nexus_session_token', token);
+    } else {
+      sessionStorage.removeItem('nexus_session_token');
+    }
+  } catch {
+    // Ignore
+  }
+}
+
+export function getSessionToken(): string | null {
+  return memorySessionToken;
+}
+
 /**
- * Universal fetch wrapper that sends only the server-managed HttpOnly cookie
+ * Universal fetch wrapper ensuring HttpOnly cookies and Bearer tokens are dispatched
  */
 async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
   const headers = new Headers(options.headers || {});
 
+  if (!headers.has('Accept')) {
+    headers.set('Accept', 'application/json, text/plain, */*');
+  }
+
   if (!headers.has('Content-Type') && options.body && typeof options.body === 'string') {
     headers.set('Content-Type', 'application/json');
+  }
+
+  if (memorySessionToken && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${memorySessionToken}`);
+    headers.set('x-session-token', memorySessionToken);
   }
 
   return fetch(url, {
@@ -56,12 +90,18 @@ export const api = {
     return res.json();
   },
 
-  // Real Authentication (Sprint 2.0)
+  // Real Authentication (Sprint 5)
   async getMe(): Promise<{ authenticated: boolean; user: User | null }> {
     const res = await fetchWithAuth('/api/auth/me');
+    if (res.status === 401) {
+      setSessionToken(null);
+      return { authenticated: false, user: null };
+    }
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      return { authenticated: false, user: null };
+    }
     const json = await res.json();
-    if (res.status === 401) return { authenticated: false, user: null };
-    if (!res.ok) throw new Error(json.error?.message || 'Session konnte nicht geprüft werden');
     return {
       authenticated: !!json.authenticated,
       user: json.user || json.data || null,
@@ -73,7 +113,7 @@ export const api = {
     email: string;
     password: string;
     displayName: string;
-  }): Promise<{ success: boolean; authenticated: boolean; user: User }> {
+  }): Promise<{ success: boolean; authenticated: boolean; user: User; token: string }> {
     const res = await fetchWithAuth('/api/auth/register', {
       method: 'POST',
       body: JSON.stringify(data),
@@ -82,40 +122,36 @@ export const api = {
     if (!res.ok || !json.success) {
       throw new Error(json.error?.message || 'Registrierung fehlgeschlagen');
     }
+    if (json.token) {
+      setSessionToken(json.token);
+    }
     return json;
   },
 
   async login(data: {
-    email: string;
+    emailOrUsername?: string;
+    email?: string;
     password: string;
-  }): Promise<{ success: boolean; authenticated: boolean; user: User }> {
+  }): Promise<{ success: boolean; authenticated: boolean; user: User; token: string }> {
     const res = await fetchWithAuth('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify(data),
     });
     const json = await res.json();
     if (!res.ok || !json.success) {
-      throw new Error(json.error?.message || 'Ungültige Anmeldedaten');
+      throw new Error(json.error?.message || 'E-Mail/Benutzername oder Passwort ist falsch.');
+    }
+    if (json.token) {
+      setSessionToken(json.token);
     }
     return json;
   },
 
   async logout(): Promise<void> {
-    const res = await fetchWithAuth('/api/auth/logout', { method: 'POST' });
-    if (!res.ok) {
-      const json = await res.json();
-      throw new Error(json.error?.message || 'Abmeldung fehlgeschlagen');
-    }
-  },
-
-  async changePassword(data: { currentPassword: string; newPassword: string }): Promise<void> {
-    const res = await fetchWithAuth('/api/auth/change-password', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-    const json = await res.json();
-    if (!res.ok || !json.success) {
-      throw new Error(json.error?.message || 'Passwort konnte nicht geändert werden');
+    try {
+      await fetchWithAuth('/api/auth/logout', { method: 'POST' });
+    } finally {
+      setSessionToken(null);
     }
   },
 
@@ -131,7 +167,7 @@ export const api = {
     return json.user || json.data;
   },
 
-  async getUserByUsername(username: string): Promise<PublicProfile> {
+  async getUserByUsername(username: string): Promise<User> {
     const res = await fetchWithAuth(`/api/users/${encodeURIComponent(username)}`);
     const json = await res.json();
     if (!res.ok) throw new Error(json.error?.message || 'Benutzer nicht gefunden');
@@ -146,15 +182,13 @@ export const api = {
 
     const res = await fetchWithAuth(`/api/projects?${params.toString()}`);
     const json = await res.json();
-    if (!res.ok) throw new Error(json.error?.message || 'Projekte konnten nicht geladen werden');
-    return json.data;
+    return json.data || [];
   },
 
   async getFeaturedProjects(): Promise<Project[]> {
     const res = await fetchWithAuth('/api/projects/featured');
     const json = await res.json();
-    if (!res.ok) throw new Error(json.error?.message || 'Hervorgehobene Projekte konnten nicht geladen werden');
-    return json.data;
+    return json.data || [];
   },
 
   async getProjectBySlug(slug: string): Promise<Project> {
@@ -212,8 +246,7 @@ export const api = {
 
     const res = await fetchWithAuth(`/api/products?${params.toString()}`);
     const json = await res.json();
-    if (!res.ok) throw new Error(json.error?.message || 'Produkte konnten nicht geladen werden');
-    return json.data;
+    return json.data || [];
   },
 
   async getProductBySlug(slug: string): Promise<Product> {
@@ -293,16 +326,13 @@ export const api = {
     if (category && category !== 'all') params.set('category', category);
     const res = await fetchWithAuth(`/api/media?${params.toString()}`);
     const json = await res.json();
-    if (!res.ok) throw new Error(json.error?.message || 'Medien konnten nicht geladen werden');
-    return json.data;
+    return json.data || [];
   },
 
-  async uploadMedia(file: File): Promise<MediaFile> {
-    const formData = new FormData();
-    formData.append('file', file);
-    const res = await fetchWithAuth('/api/media/upload', {
+  async uploadMedia(mediaData: { filename: string; originalName?: string; storagePath?: string; mimeType?: string; fileSize?: number; fileCategory?: 'image' | 'file' | 'document' | '3d' }): Promise<MediaFile> {
+    const res = await fetchWithAuth('/api/media', {
       method: 'POST',
-      body: formData,
+      body: JSON.stringify(mediaData),
     });
     const json = await res.json();
     if (!res.ok) throw new Error(json.error?.message || 'Fehler beim Hochladen der Mediendatei');
@@ -355,8 +385,7 @@ export const api = {
   async getCart(): Promise<any[]> {
     const res = await fetchWithAuth('/api/cart');
     const json = await res.json();
-    if (!res.ok) throw new Error(json.error?.message || 'Warenkorb konnte nicht geladen werden');
-    return json.data;
+    return json.data || [];
   },
 
   async addToCart(productId: string, quantity = 1): Promise<any[]> {
@@ -365,8 +394,18 @@ export const api = {
       body: JSON.stringify({ productId, quantity }),
     });
     const json = await res.json();
-    if (!res.ok) throw new Error(json.error?.message || 'Produkt konnte nicht zum Warenkorb hinzugefügt werden');
-    return json.data;
+    if (!res.ok) throw new Error(json.error?.message || 'Fehler beim Hinzufügen zum Warenkorb');
+    return json.data || [];
+  },
+
+  async updateCartQuantity(productId: string, quantity: number): Promise<any[]> {
+    const res = await fetchWithAuth(`/api/cart/${encodeURIComponent(productId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ quantity }),
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error?.message || 'Fehler beim Aktualisieren des Warenkorbs');
+    return json.data || [];
   },
 
   async removeFromCart(productId: string): Promise<any[]> {
@@ -374,16 +413,12 @@ export const api = {
       method: 'DELETE',
     });
     const json = await res.json();
-    if (!res.ok) throw new Error(json.error?.message || 'Produkt konnte nicht aus dem Warenkorb entfernt werden');
-    return json.data;
+    if (!res.ok) throw new Error(json.error?.message || 'Fehler beim Entfernen aus dem Warenkorb');
+    return json.data || [];
   },
 
   async clearCart(): Promise<void> {
-    const res = await fetchWithAuth('/api/cart/clear', { method: 'POST' });
-    if (!res.ok) {
-      const json = await res.json();
-      throw new Error(json.error?.message || 'Warenkorb konnte nicht geleert werden');
-    }
+    await fetchWithAuth('/api/cart/clear', { method: 'POST' });
   },
 
   async checkout(): Promise<Order> {

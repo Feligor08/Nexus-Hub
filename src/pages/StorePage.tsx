@@ -20,12 +20,14 @@ interface StorePageProps {
   selectedSlug?: string;
   onNavigateToProduct?: (slug: string) => void;
   onBack?: () => void;
+  onOpenCheckout?: () => void;
 }
 
 export const StorePage: React.FC<StorePageProps> = ({
   selectedSlug,
   onNavigateToProduct,
   onBack,
+  onOpenCheckout,
 }) => {
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -34,8 +36,39 @@ export const StorePage: React.FC<StorePageProps> = ({
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [claimStatus, setClaimStatus] = useState<string | null>(null);
+  const [addingProductId, setAddingProductId] = useState<string | null>(null);
   const { addToCart, setIsCartOpen } = useCart();
   const { isAuthenticated, openAuthModal } = useAuth();
+
+  const handleAddToCart = async (product: Product, openCartDrawer = false) => {
+    try {
+      setAddingProductId(product.id);
+      await addToCart(product, 1);
+      if (openCartDrawer) {
+        setIsCartOpen(true);
+      }
+    } catch (err: any) {
+      setClaimStatus(`Warenkorb-Fehler: ${err.message || 'Produkt konnte nicht hinzugefügt werden.'}`);
+    } finally {
+      setAddingProductId(null);
+    }
+  };
+
+  const handleDirectCheckout = async (product: Product) => {
+    try {
+      setAddingProductId(product.id);
+      await addToCart(product, 1);
+      if (onOpenCheckout) {
+        onOpenCheckout();
+      } else {
+        setIsCartOpen(true);
+      }
+    } catch (err: any) {
+      setClaimStatus(`Warenkorb-Fehler: ${err.message || 'Produkt konnte nicht hinzugefügt werden.'}`);
+    } finally {
+      setAddingProductId(null);
+    }
+  };
 
   useEffect(() => {
     let isCurrent = true;
@@ -248,17 +281,16 @@ export const StorePage: React.FC<StorePageProps> = ({
                 ) : (
                   <>
                     <button
-                      onClick={() => addToCart(activeProduct, 1)}
-                      className="w-full py-3 bg-white hover:bg-zinc-200 text-black font-bold text-xs rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                      onClick={() => handleAddToCart(activeProduct, false)}
+                      disabled={addingProductId === activeProduct.id}
+                      className="w-full py-3 bg-white hover:bg-zinc-200 disabled:bg-zinc-800 disabled:text-zinc-600 text-black font-bold text-xs rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer"
                     >
                       <ShoppingBag className="w-4 h-4" />
-                      <span>In den Warenkorb</span>
+                      <span>{addingProductId === activeProduct.id ? 'Wird hinzugefügt...' : 'In den Warenkorb'}</span>
                     </button>
                     <button
-                      onClick={async () => {
-                        await addToCart(activeProduct, 1);
-                        setIsCartOpen(true);
-                      }}
+                      onClick={() => handleDirectCheckout(activeProduct)}
+                      disabled={addingProductId === activeProduct.id}
                       className="w-full py-2.5 liquid-glass-button text-xs font-semibold rounded-lg cursor-pointer"
                     >
                       Direkt zur Kasse
@@ -393,11 +425,12 @@ export const StorePage: React.FC<StorePageProps> = ({
                     </button>
                   ) : (
                     <button
-                      onClick={() => addToCart(prod, 1)}
-                      className="flex-1 py-2 bg-white hover:bg-zinc-200 text-black font-bold text-2xs rounded-lg transition-colors flex items-center justify-center gap-1 cursor-pointer"
+                      onClick={() => handleAddToCart(prod, false)}
+                      disabled={addingProductId === prod.id}
+                      className="flex-1 py-2 bg-white hover:bg-zinc-200 disabled:bg-zinc-800 disabled:text-zinc-600 text-black font-bold text-2xs rounded-lg transition-colors flex items-center justify-center gap-1 cursor-pointer"
                     >
                       <ShoppingBag className="w-3.5 h-3.5" />
-                      <span>In den Korb</span>
+                      <span>{addingProductId === prod.id ? '...' : 'In den Korb'}</span>
                     </button>
                   )}
                 </div>

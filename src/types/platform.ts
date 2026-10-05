@@ -14,23 +14,29 @@ export interface User {
   badges: string[];
   githubUrl?: string;
   websiteUrl?: string;
+  website?: string;
+  location?: string;
   createdAt: string;
   status: 'ACTIVE' | 'SUSPENDED';
   lastLoginAt?: string;
 }
 
-export interface PublicProfile {
+export interface CreatorApplication {
   id: string;
-  username: string;
-  displayName: string;
-  avatar: string;
-  bio: string;
-  skills: string[];
-  technologies: string[];
-  badges: string[];
-  githubUrl?: string;
-  websiteUrl?: string;
+  userId: string;
+  userUsername?: string;
+  userEmail?: string;
+  userDisplayName?: string;
+  portfolioUrl?: string;
+  motivation: string;
+  plannedProjects: string;
+  plannedContent: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  adminNotes?: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface Project {
@@ -42,9 +48,7 @@ export interface Project {
   category: 'Software' | 'DevOps' | 'GameServer' | 'AI & Automation' | 'Maker' | 'ITA Curriculum' | string;
   techStack: string[];
   coverImage?: string;
-  coverMediaId?: string;
   galleryImages: string[];
-  galleryMediaIds?: string[];
   githubUrl?: string;
   liveUrl?: string;
   demoUrl?: string;
@@ -54,8 +58,6 @@ export interface Project {
   visibility?: 'PUBLIC' | 'PRIVATE';
   problem?: string;
   solution?: string;
-  goal?: string;
-  result?: string;
   architecture?: string;
   caseStudyProblem?: string;
   caseStudySolution?: string;
@@ -91,15 +93,6 @@ export interface Product {
   visibility?: 'PUBLIC' | 'PRIVATE';
   publishedAt?: string;
   mediaFileId?: string;
-  coverMediaId?: string;
-  galleryMediaIds?: string[];
-  downloadMediaId?: string;
-  tags?: string[];
-  features?: string[];
-  requirements?: string[];
-  changelog?: string;
-  metaTitle?: string;
-  metaDescription?: string;
   demoFileUrl?: string;
   documentationUrl?: string;
   rating?: number;
@@ -134,7 +127,7 @@ export interface Order {
   totalAmount: number;
   currency: string;
   status: 'COMPLETED' | 'PENDING' | 'CANCELLED';
-  paymentStatus: 'PAID' | 'PENDING' | 'FAILED' | 'NOT_REQUIRED';
+  paymentStatus: 'PAID' | 'PENDING' | 'FAILED' | 'ORDER_CREATED';
   downloadToken: string;
   createdAt: string;
 }
@@ -242,7 +235,6 @@ export interface MediaFile {
   filename: string;
   originalName: string;
   storagePath: string;
-  storageKey?: string;
   mimeType: string;
   fileSize: number;
   fileCategory: 'image' | 'file' | 'document' | '3d';

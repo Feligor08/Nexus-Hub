@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { X, LogIn, UserPlus, Eye, EyeOff, Sparkles, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { X, LogIn, UserPlus, Eye, EyeOff, AlertCircle, CheckCircle2 } from 'lucide-react';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -17,25 +17,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [mode, setMode] = useState<'login' | 'register'>(initialMode);
 
   // Form states
-  const [email, setEmail] = useState('');
+  const [emailOrUsername, setEmailOrUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   // Status states
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successNotice, setSuccessNotice] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    setMode(initialMode);
-    setError(null);
-    setSuccessNotice(null);
-    setConfirmPassword('');
-  }, [initialMode, isOpen]);
 
   if (!isOpen) return null;
 
@@ -43,46 +37,89 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     e.preventDefault();
     setError(null);
     setSuccessNotice(null);
-    if (mode === 'register' && password !== confirmPassword) {
-      setError('Die Passwörter stimmen nicht überein.');
-      return;
+
+    // Client-side validations (Sections 15, 16)
+    if (mode === 'register') {
+      const trimmedUser = username.trim();
+      if (trimmedUser.length < 3 || trimmedUser.length > 30) {
+        setError('Der Benutzername muss zwischen 3 und 30 Zeichen lang sein.');
+        return;
+      }
+
+      if (!/^[a-zA-Z0-9_]+$/.test(trimmedUser)) {
+        setError('Der Benutzername darf nur Buchstaben, Zahlen und Unterstriche enthalten.');
+        return;
+      }
+
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!email || !emailRegex.test(email.trim())) {
+        setError('Die E-Mail-Adresse ist ungültig.');
+        return;
+      }
+
+      if (password.length < 12) {
+        setError('Das Passwort muss mindestens 12 Zeichen enthalten.');
+        return;
+      }
+
+      if (password !== confirmPassword) {
+        setError('Die Passwörter stimmen nicht überein.');
+        return;
+      }
+    } else {
+      if (!emailOrUsername.trim() || !password) {
+        setError('Bitte E-Mail/Benutzername und Passwort eingeben.');
+        return;
+      }
     }
+
     setIsSubmitting(true);
 
     try {
       if (mode === 'login') {
-        await login({ email, password });
+        await login({ emailOrUsername: emailOrUsername.trim(), password });
         setSuccessNotice('Erfolgreich angemeldet.');
-        setTimeout(() => onClose(), 600);
+        setTimeout(() => onClose(), 500);
       } else {
-        await register({ username, email, password, displayName });
-        setSuccessNotice('Registrierung erfolgreich! Willkommen auf Nexus Code Play.');
-        setTimeout(() => onClose(), 700);
+        await register({
+          username: username.trim().toLowerCase(),
+          email: email.trim().toLowerCase(),
+          password,
+          displayName: displayName.trim() || username.trim(),
+        });
+        setSuccessNotice('Registrierung erfolgreich! Sitzung wurde gestartet.');
+        setTimeout(() => onClose(), 600);
       }
     } catch (err: any) {
-      setError(err.message || 'Authentifizierungsfehler');
+      setError(err.message || 'Authentifizierungsfehler aufgetreten.');
     } finally {
       setIsSubmitting(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="w-full max-w-md glass-2 rounded-2xl border border-white/10 shadow-2xl overflow-hidden flex flex-col">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md bg-[#060709] rounded-2xl border border-white/10 shadow-2xl overflow-hidden flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b border-white/10 bg-white/[0.02]">
           <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-xl bg-white/10 border border-white/15 text-white">
+            <div className="p-2 rounded-xl bg-white/5 border border-white/10 text-white">
               {mode === 'login' ? <LogIn className="w-4 h-4" /> : <UserPlus className="w-4 h-4" />}
             </div>
             <div>
               <h3 className="text-base font-semibold text-white">
-                {mode === 'login' ? 'Auf Nexus anmelden' : 'Neues Entwickler-Konto'}
+                {mode === 'login' ? 'Anmelden' : 'Registrieren'}
               </h3>
               <p className="text-2xs text-zinc-400">
                 {mode === 'login'
-                  ? 'Sichere Session via MariaDB 11 & HttpOnly Cookie'
-                  : 'Tritt der Nexus Code Play Plattform bei'}
+                  ? 'Sichere Session via MariaDB & HttpOnly Cookie'
+                  : 'Neues Benutzerkonto mit Standardrolle USER erstellen'}
               </p>
             </div>
           </div>
@@ -128,7 +165,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         </div>
 
         {/* Content Form */}
-        <form onSubmit={handleSubmit} className="p-5 space-y-4">
+        <form onSubmit={handleSubmit} className="p-5 space-y-3.5">
           {error && (
             <div className="p-3 bg-rose-950/40 border border-rose-800/50 rounded-xl text-xs text-rose-200 flex items-start gap-2.5 animate-in fade-in duration-150">
               <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
@@ -143,15 +180,90 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </div>
           )}
 
-          {mode === 'register' && (
+          {mode === 'login' ? (
             <>
+              {/* Login Fields */}
               <div>
                 <label className="block text-2xs font-mono uppercase tracking-wider text-zinc-400 mb-1.5">
-                  Anzeigename
+                  E-Mail oder Benutzername
                 </label>
                 <input
                   type="text"
                   required
+                  autoFocus
+                  value={emailOrUsername}
+                  onChange={(e) => setEmailOrUsername(e.target.value)}
+                  placeholder="user@example.com oder feligor08"
+                  className="w-full px-3.5 py-2.5 bg-black/40 border border-white/10 rounded-xl text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-white/40 focus:ring-1 focus:ring-white/20 transition-all font-mono"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-2xs font-mono uppercase tracking-wider text-zinc-400">
+                    Passwort
+                  </label>
+                </div>
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••••••"
+                    className="w-full px-3.5 py-2.5 pr-10 bg-black/40 border border-white/10 rounded-xl text-xs font-mono text-white placeholder-zinc-500 focus:outline-none focus:border-white/40 focus:ring-1 focus:ring-white/20 transition-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 cursor-pointer p-1"
+                    aria-label="Passwort anzeigen"
+                  >
+                    {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              {/* Register Fields */}
+              <div>
+                <label className="block text-2xs font-mono uppercase tracking-wider text-zinc-400 mb-1.5">
+                  Benutzername (3–30 Zeichen, a-z, 0-9, _)
+                </label>
+                <input
+                  type="text"
+                  required
+                  autoFocus
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="z.B. dev_user"
+                  pattern="^[a-zA-Z0-9_]{3,30}$"
+                  title="3 bis 30 Zeichen, nur Buchstaben, Zahlen und Unterstriche"
+                  className="w-full px-3.5 py-2.5 bg-black/40 border border-white/10 rounded-xl text-xs font-mono text-white placeholder-zinc-500 focus:outline-none focus:border-white/40 focus:ring-1 focus:ring-white/20 transition-all"
+                />
+              </div>
+
+              <div>
+                <label className="block text-2xs font-mono uppercase tracking-wider text-zinc-400 mb-1.5">
+                  E-Mail-Adresse
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="user@example.com"
+                  className="w-full px-3.5 py-2.5 bg-black/40 border border-white/10 rounded-xl text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-white/40 focus:ring-1 focus:ring-white/20 transition-all font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-2xs font-mono uppercase tracking-wider text-zinc-400 mb-1.5">
+                  Anzeigename <span className="text-zinc-500 font-normal lowercase">(optional)</span>
+                </label>
+                <input
+                  type="text"
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
                   placeholder="z.B. Johann Schneider"
@@ -161,90 +273,63 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
               <div>
                 <label className="block text-2xs font-mono uppercase tracking-wider text-zinc-400 mb-1.5">
-                  Benutzername (eindeutig)
+                  Passwort (mindestens 12 Zeichen)
                 </label>
-                <input
-                  type="text"
-                  required
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  placeholder="z.B. j_schneider"
-                  pattern="^[a-zA-Z0-9_]{3,30}$"
-                  title="3 bis 30 Zeichen, nur Buchstaben, Zahlen und Unterstriche"
-                  className="w-full px-3.5 py-2.5 bg-black/40 border border-white/10 rounded-xl text-xs font-mono text-white placeholder-zinc-500 focus:outline-none focus:border-white/40 focus:ring-1 focus:ring-white/20 transition-all"
-                />
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Mindestens 12 Zeichen"
+                    minLength={12}
+                    className="w-full px-3.5 py-2.5 pr-10 bg-black/40 border border-white/10 rounded-xl text-xs font-mono text-white placeholder-zinc-500 focus:outline-none focus:border-white/40 focus:ring-1 focus:ring-white/20 transition-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 cursor-pointer p-1"
+                    aria-label="Passwort anzeigen"
+                  >
+                    {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-2xs font-mono uppercase tracking-wider text-zinc-400 mb-1.5">
+                  Passwort bestätigen
+                </label>
+                <div className="relative">
+                  <input
+                    type={showConfirmPassword ? 'text' : 'password'}
+                    required
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="Passwort wiederholen"
+                    minLength={12}
+                    className="w-full px-3.5 py-2.5 pr-10 bg-black/40 border border-white/10 rounded-xl text-xs font-mono text-white placeholder-zinc-500 focus:outline-none focus:border-white/40 focus:ring-1 focus:ring-white/20 transition-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 cursor-pointer p-1"
+                    aria-label="Passwort anzeigen"
+                  >
+                    {showConfirmPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
               </div>
             </>
-          )}
-
-          <div>
-            <label className="block text-2xs font-mono uppercase tracking-wider text-zinc-400 mb-1.5">
-              {mode === 'login' ? 'E-Mail oder Benutzername' : 'E-Mail-Adresse'}
-            </label>
-            <input
-              type={mode === 'login' ? 'text' : 'email'}
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder={mode === 'login' ? 'name@beispiel.de oder feligor08' : 'name@beispiel.de'}
-              className="w-full px-3.5 py-2.5 bg-black/40 border border-white/10 rounded-xl text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-white/40 focus:ring-1 focus:ring-white/20 transition-all"
-            />
-          </div>
-
-          <div>
-            <label className="block text-2xs font-mono uppercase tracking-wider text-zinc-400 mb-1.5">
-              Passwort
-            </label>
-            <div className="relative">
-              <input
-                type={showPassword ? 'text' : 'password'}
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                  minLength={mode === 'register' ? 12 : undefined}
-                  autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-                className="w-full px-3.5 py-2.5 pr-10 bg-black/40 border border-white/10 rounded-xl text-xs font-mono text-white placeholder-zinc-500 focus:outline-none focus:border-white/40 focus:ring-1 focus:ring-white/20 transition-all"
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 cursor-pointer p-1"
-                aria-label="Passwort anzeigen"
-              >
-                {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-              </button>
-            </div>
-            {mode === 'register' && (
-              <span className="text-3xs text-zinc-500 mt-1 block">Mindestens 12 Zeichen.</span>
-            )}
-          </div>
-
-          {mode === 'register' && (
-            <div>
-              <label className="block text-2xs font-mono uppercase tracking-wider text-zinc-400 mb-1.5" htmlFor="auth-confirm-password">
-                Passwort bestätigen
-              </label>
-              <input
-                id="auth-confirm-password"
-                type={showPassword ? 'text' : 'password'}
-                required
-                minLength={12}
-                autoComplete="new-password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                className="w-full px-3.5 py-2.5 bg-black/40 border border-white/10 rounded-xl text-xs font-mono text-white placeholder-zinc-500 focus:outline-none focus:border-white/40"
-              />
-            </div>
           )}
 
           <button
             type="submit"
             disabled={isSubmitting}
-            className="w-full py-2.5 px-4 bg-white text-black font-semibold text-xs rounded-xl hover:bg-zinc-200 active:scale-[0.99] transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2 mt-2 shadow-lg shadow-white/5"
+            className="w-full py-2.5 px-4 bg-white text-black font-semibold text-xs rounded-xl hover:bg-zinc-200 active:scale-[0.99] transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2 mt-3 shadow-lg shadow-white/5"
           >
             {isSubmitting ? (
-              <div className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin"></div>
+              <span>{mode === 'login' ? 'Wird angemeldet…' : 'Wird registriert…'}</span>
             ) : mode === 'login' ? (
               <>
                 <LogIn className="w-3.5 h-3.5" />
@@ -253,11 +338,42 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             ) : (
               <>
                 <UserPlus className="w-3.5 h-3.5" />
-                <span>Konto anlegen</span>
+                <span>Registrieren</span>
               </>
             )}
           </button>
 
+          <div className="pt-2 text-center text-2xs text-zinc-400">
+            {mode === 'login' ? (
+              <span>
+                Noch kein Konto?{' '}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('register');
+                    setError(null);
+                  }}
+                  className="text-white hover:underline cursor-pointer font-medium"
+                >
+                  Jetzt registrieren
+                </button>
+              </span>
+            ) : (
+              <span>
+                Bereits registriert?{' '}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('login');
+                    setError(null);
+                  }}
+                  className="text-white hover:underline cursor-pointer font-medium"
+                >
+                  Hier anmelden
+                </button>
+              </span>
+            )}
+          </div>
         </form>
       </div>
     </div>

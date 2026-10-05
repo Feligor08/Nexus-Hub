@@ -208,7 +208,7 @@ export const CreatorPage: React.FC<CreatorPageProps> = ({ onNavigate }) => {
           <div className="flex items-center gap-2 text-2xs font-mono text-zinc-400 uppercase tracking-wider">
             <span>Nexus Content Management</span>
             <span>·</span>
-            <span className="text-white font-bold">{currentUser.role} Studio</span>
+            <span className="text-white font-bold">{currentUser?.role || 'CREATOR'} Studio</span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-white mt-1">
             Creator Dashboard &amp; CMS

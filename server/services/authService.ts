@@ -6,11 +6,13 @@ export interface RegisterDTO {
   username: string;
   email: string;
   password: string;
-  displayName: string;
+  displayName?: string;
 }
 
 export interface LoginDTO {
-  email: string;
+  email?: string;
+  username?: string;
+  emailOrUsername?: string;
   password: string;
 }
 
@@ -20,7 +22,6 @@ export interface AuthResult {
   user?: User;
   token?: string;
   error?: string;
-  errorCode?: 'VALIDATION' | 'CONFLICT';
 }
 
 export class AuthService {
@@ -36,21 +37,20 @@ export class AuthService {
   }
 
   /**
-   * Generates a cryptographically strong session token
+   * Generates a cryptographically strong session token (32 bytes = 64 hex chars)
    */
   generateSessionToken(): string {
     return crypto.randomBytes(32).toString('hex');
   }
 
   /**
-   * Register a new user
+   * Register a new user atomically within a database transaction
    */
-  async register(input: RegisterDTO, clientIp?: string, userAgent?: string): Promise<AuthResult> {
-    const dto = input && typeof input === 'object' ? input : {} as RegisterDTO;
-    const username = typeof dto.username === 'string' ? dto.username.trim() : '';
-    const email = typeof dto.email === 'string' ? dto.email.trim().toLowerCase() : '';
-    const password = typeof dto.password === 'string' ? dto.password : '';
-    const displayName = typeof dto.displayName === 'string' ? dto.displayName.trim() : '';
+  async register(dto: RegisterDTO, clientIp?: string, userAgent?: string): Promise<AuthResult> {
+    const username = (dto.username || '').trim().toLowerCase();
+    const email = (dto.email || '').trim().toLowerCase();
+    const password = dto.password || '';
+    const displayName = (dto.displayName || '').trim() || username;
 
     // 1. Validation
     if (!username || username.length < 3 || username.length > 30) {
@@ -69,24 +69,20 @@ export class AuthService {
       };
     }
 
-    if (!displayName || displayName.length > 100) {
-      return { success: false, authenticated: false, errorCode: 'VALIDATION', error: 'Der Anzeigename muss zwischen 1 und 100 Zeichen lang sein.' };
-    }
-
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!email || email.length > 191 || !emailRegex.test(email)) {
+    if (!email || !emailRegex.test(email)) {
       return {
         success: false,
         authenticated: false,
-        error: 'Bitte gib eine gültige E-Mail-Adresse ein.',
+        error: 'Die E-Mail-Adresse ist ungültig.',
       };
     }
 
-    if (!password || password.length < 12 || Buffer.byteLength(password, 'utf8') > 72) {
+    if (!password || password.length < 12) {
       return {
         success: false,
         authenticated: false,
-        error: 'Das Passwort muss mindestens 12 Zeichen lang sein und darf höchstens 72 UTF-8-Bytes umfassen.',
+        error: 'Das Passwort muss mindestens 12 Zeichen enthalten.',
       };
     }
 
@@ -96,7 +92,6 @@ export class AuthService {
       return {
         success: false,
         authenticated: false,
-        errorCode: 'CONFLICT',
         error: 'Dieser Benutzername ist bereits vergeben.',
       };
     }
@@ -106,50 +101,68 @@ export class AuthService {
       return {
         success: false,
         authenticated: false,
-        errorCode: 'CONFLICT',
         error: 'Ein Konto mit dieser E-Mail-Adresse existiert bereits.',
       };
     }
 
-    // 3. Password Hashing (bcrypt with salt rounds)
+    // 3. Password Hashing (bcrypt with 12 salt rounds)
     const passwordHash = await userRepository.hashPassword(password);
-    const userId = `usr-${crypto.randomUUID()}`;
+    const userId = `usr-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
     const token = this.generateSessionToken();
+    const sessionId = `sess-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
 
-    // User, standard role, badge and initial session commit atomically.
-    const createdUser = await userRepository.registerUser({
-      id: userId,
-      username,
-      email,
-      passwordHash,
-      displayName,
-    }, token, clientIp, userAgent);
+    try {
+      // 4. Atomic Registration Transaction (User + USER role + Session)
+      const { user } = await userRepository.registerUserWithSession(
+        {
+          id: userId,
+          username,
+          email,
+          passwordHash,
+          displayName,
+        },
+        {
+          id: sessionId,
+          token,
+          ipAddress: clientIp,
+          userAgent,
+          daysValid: 30,
+        }
+      );
 
-    return {
-      success: true,
-      authenticated: true,
-      user: this.sanitizeUser(createdUser),
-      token,
-    };
+      return {
+        success: true,
+        authenticated: true,
+        user: this.sanitizeUser(user),
+        token,
+      };
+    } catch (err: any) {
+      console.error('Registration transaction failed:', err);
+      return {
+        success: false,
+        authenticated: false,
+        error: 'Registrierung fehlgeschlagen. Dieser Benutzername oder diese E-Mail existiert möglicherweise bereits.',
+      };
+    }
   }
 
   /**
    * Log in an existing user
    */
-  async login(input: LoginDTO, clientIp?: string, userAgent?: string): Promise<AuthResult> {
-    const dto = input && typeof input === 'object' ? input : {} as LoginDTO;
-    const rawIdentifier = typeof dto.email === 'string' ? dto.email.trim() : '';
-    const identifier = rawIdentifier.includes('@') ? rawIdentifier.toLowerCase() : rawIdentifier;
-    const password = typeof dto.password === 'string' ? dto.password : '';
-    const genericAuthError = 'Ungültige Anmeldedaten.';
+  async login(dto: LoginDTO, clientIp?: string, userAgent?: string): Promise<AuthResult> {
+    const identifier = (dto.emailOrUsername || dto.email || dto.username || '').trim();
+    const password = dto.password || '';
 
     if (!identifier || !password) {
       return {
         success: false,
         authenticated: false,
-        error: genericAuthError,
+        error: 'Bitte E-Mail/Benutzername und Passwort eingeben.',
       };
     }
+
+    // Generic error message for security (Section 10 - prevents user enumeration)
+    const genericAuthError = 'E-Mail/Benutzername oder Passwort ist falsch.';
 
     const userWithCreds = await userRepository.findWithCredentials(identifier);
     if (!userWithCreds) {
@@ -164,11 +177,11 @@ export class AuthService {
       return {
         success: false,
         authenticated: false,
-        error: genericAuthError,
+        error: 'Dieses Konto wurde vorübergehend gesperrt. Bitte wende dich an den Support.',
       };
     }
 
-    // Verify Password Hash
+    // Verify Password Hash with bcrypt
     const isPasswordValid = await userRepository.verifyPassword(
       password,
       userWithCreds.passwordHash || ''
@@ -185,7 +198,7 @@ export class AuthService {
     // Update last login
     await userRepository.updateLastLogin(userWithCreds.id);
 
-    // Create new session
+    // Create new secure session
     const token = this.generateSessionToken();
     await userRepository.createSession(userWithCreds.id, token, clientIp, userAgent);
 
@@ -208,7 +221,7 @@ export class AuthService {
   }
 
   /**
-   * Log out and terminate session
+   * Log out and terminate session serverseitig
    */
   async logout(token: string): Promise<boolean> {
     if (!token) return true;
@@ -216,25 +229,44 @@ export class AuthService {
     return true;
   }
 
-  async changePassword(userId: string, currentPassword: string, newPassword: string, currentSessionToken: string): Promise<AuthResult> {
-    const genericError = 'Das aktuelle Passwort ist ungültig.';
-    if (!currentPassword || !newPassword) {
-      return { success: false, authenticated: true, error: 'Beide Passwortfelder sind erforderlich.' };
-    }
-    if (newPassword.length < 12 || Buffer.byteLength(newPassword, 'utf8') > 72) {
-      return { success: false, authenticated: true, error: 'Das neue Passwort muss mindestens 12 Zeichen lang sein und darf höchstens 72 UTF-8-Bytes umfassen.' };
-    }
-
-    const user = await userRepository.findById(userId);
-    const credentials = user ? await userRepository.findWithCredentials(user.email) : null;
-    if (!user || !credentials || !(await userRepository.verifyPassword(currentPassword, credentials.passwordHash || ''))) {
-      return { success: false, authenticated: true, error: genericError };
+  /**
+   * Change user password with security verification and session re-issuance
+   */
+  async changePassword(
+    userId: string,
+    currentPass: string,
+    newPass: string,
+    currentToken?: string
+  ): Promise<{ success: boolean; error?: string; newToken?: string }> {
+    if (!currentPass || !newPass) {
+      return { success: false, error: 'Bitte aktuelles und neues Passwort eingeben.' };
     }
 
-    const passwordHash = await userRepository.hashPassword(newPassword);
-    const changed = await userRepository.changePassword(userId, passwordHash, currentSessionToken);
-    if (!changed) return { success: false, authenticated: true, error: 'Benutzer nicht gefunden.' };
-    return { success: true, authenticated: true, user: this.sanitizeUser(user) };
+    if (newPass.length < 12) {
+      return { success: false, error: 'Das neue Passwort muss mindestens 12 Zeichen lang sein.' };
+    }
+
+    const userWithCreds = await userRepository.findWithCredentials(userId);
+    if (!userWithCreds || !userWithCreds.passwordHash) {
+      return { success: false, error: 'Benutzerkonto nicht gefunden.' };
+    }
+
+    const isValid = await userRepository.verifyPassword(currentPass, userWithCreds.passwordHash);
+    if (!isValid) {
+      return { success: false, error: 'Das aktuelle Passwort ist nicht korrekt.' };
+    }
+
+    const newHash = await userRepository.hashPassword(newPass);
+    await userRepository.updatePassword(userId, newHash);
+
+    // Revoke previous sessions for security (Session Revocation)
+    await userRepository.deleteUserSessions(userId);
+
+    // Generate a fresh session for the current client
+    const newToken = this.generateSessionToken();
+    await userRepository.createSession(userId, newToken);
+
+    return { success: true, newToken };
   }
 }
 

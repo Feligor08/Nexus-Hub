@@ -50,6 +50,8 @@ export const authenticate = async (
   next: NextFunction
 ) => {
   try {
+    const cookies = parseCookies(req.headers.cookie);
+    (req as any).cookies = cookies;
     const token = extractToken(req);
     if (token) {
       const user = await authService.validateSession(token);

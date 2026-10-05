@@ -6,8 +6,7 @@ interface AuthContextType {
   currentUser: User | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  authError: string | null;
-  login: (credentials: { email: string; password: string }) => Promise<void>;
+  login: (credentials: { emailOrUsername?: string; email?: string; password: string }) => Promise<void>;
   register: (data: {
     username: string;
     email: string;
@@ -32,7 +31,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [authError, setAuthError] = useState<string | null>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<'login' | 'register'>('login');
 
@@ -46,7 +44,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const loadUser = async () => {
-    setAuthError(null);
     try {
       const res = await api.getMe();
       if (res.authenticated && res.user) {
@@ -57,10 +54,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setIsAuthenticated(false);
       }
     } catch (e) {
-      console.error('Session restore failed:', e);
+      console.warn('Session restore check completed with guest state:', e);
       setCurrentUser(null);
       setIsAuthenticated(false);
-      setAuthError(e instanceof Error ? e.message : 'Session konnte nicht geprüft werden.');
     } finally {
       setIsLoading(false);
     }
@@ -70,9 +66,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     loadUser();
   }, []);
 
-  const login = async (credentials: { email: string; password: string }) => {
+  const login = async (credentials: { emailOrUsername?: string; email?: string; password: string }) => {
     const res = await api.login(credentials);
-    setAuthError(null);
     setCurrentUser(res.user);
     setIsAuthenticated(true);
     closeAuthModal();
@@ -85,7 +80,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     displayName: string;
   }) => {
     const res = await api.register(data);
-    setAuthError(null);
     setCurrentUser(res.user);
     setIsAuthenticated(true);
     closeAuthModal();
@@ -94,13 +88,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = async () => {
     try {
       await api.logout();
-    } catch (error) {
-      setAuthError(error instanceof Error ? error.message : 'Abmeldung fehlgeschlagen.');
-      throw error;
+    } catch (e) {
+      console.warn('Logout API error:', e);
+    } finally {
+      setCurrentUser(null);
+      setIsAuthenticated(false);
     }
-    setCurrentUser(null);
-    setIsAuthenticated(false);
-    setAuthError(null);
   };
 
   const updateProfile = async (profileData: Partial<User>): Promise<User> => {
@@ -120,7 +113,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         currentUser,
         isAuthenticated,
         isLoading,
-        authError,
         login,
         register,
         logout,

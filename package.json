@@ -10,6 +10,7 @@
     "test": "vitest run",
     "test": "vitest run",
     "start": "tsx server.ts",
+    "admin:bootstrap": "tsx server/scripts/adminBootstrap.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"

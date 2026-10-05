@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { api } from '../services/api';
 import { Product } from '../types/platform';
-import { useAuth } from './AuthContext';
 
 export interface CartItem {
   id: string;
@@ -18,8 +17,8 @@ interface CartContextType {
   items: CartItem[];
   itemCount: number;
   totalAmount: number;
-  cartError: string | null;
   addToCart: (product: Product, quantity?: number) => Promise<void>;
+  updateQuantity: (productId: string, quantity: number) => Promise<void>;
   removeFromCart: (productId: string) => Promise<void>;
   clearCart: () => Promise<void>;
   refreshCart: () => Promise<void>;
@@ -30,13 +29,10 @@ interface CartContextType {
 const CartContext = createContext<CartContextType | undefined>(undefined);
 
 export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { isAuthenticated, openAuthModal } = useAuth();
   const [items, setItems] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
-  const [cartError, setCartError] = useState<string | null>(null);
 
   const loadCart = async () => {
-    setCartError(null);
     try {
       const data = await api.getCart();
       const mapped: CartItem[] = data.map((item: any) => ({
@@ -52,52 +48,49 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setItems(mapped);
     } catch (e) {
       console.error('Failed to load cart:', e);
-      setCartError(e instanceof Error ? e.message : 'Warenkorb konnte nicht geladen werden.');
     }
   };
 
   useEffect(() => {
-    if (isAuthenticated) {
-      void loadCart();
-    } else {
-      setItems([]);
-    }
-  }, [isAuthenticated]);
+    loadCart();
+  }, []);
 
   const addToCart = async (product: Product, quantity = 1) => {
-    if (!isAuthenticated) {
-      openAuthModal('login');
-      return;
-    }
     try {
       await api.addToCart(product.id, quantity);
       await loadCart();
       setIsCartOpen(true);
     } catch (e) {
       console.error('Failed to add to cart:', e);
-      setCartError(e instanceof Error ? e.message : 'Produkt konnte nicht hinzugefügt werden.');
+      throw e;
+    }
+  };
+
+  const updateQuantity = async (productId: string, quantity: number) => {
+    try {
+      await api.updateCartQuantity(productId, quantity);
+      await loadCart();
+    } catch (e) {
+      console.error('Failed to update cart quantity:', e);
+      throw e;
     }
   };
 
   const removeFromCart = async (productId: string) => {
-    if (!isAuthenticated) return;
     try {
       await api.removeFromCart(productId);
       await loadCart();
     } catch (e) {
       console.error('Failed to remove from cart:', e);
-      setCartError(e instanceof Error ? e.message : 'Produkt konnte nicht entfernt werden.');
     }
   };
 
   const clearCart = async () => {
-    if (!isAuthenticated) return;
     try {
       await api.clearCart();
       setItems([]);
     } catch (e) {
       console.error('Failed to clear cart:', e);
-      setCartError(e instanceof Error ? e.message : 'Warenkorb konnte nicht geleert werden.');
     }
   };
 
@@ -110,8 +103,8 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
         items,
         itemCount,
         totalAmount,
-        cartError,
         addToCart,
+        updateQuantity,
         removeFromCart,
         clearCart,
         refreshCart: loadCart,

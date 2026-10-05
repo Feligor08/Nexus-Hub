@@ -1,13 +1,13 @@
 import React from 'react';
 import { useCart } from '../context/CartContext';
-import { ShoppingBag, X, Trash2, ArrowRight, Download } from 'lucide-react';
+import { ShoppingBag, X, Trash2, ArrowRight, Download, Plus, Minus } from 'lucide-react';
 
 interface CartDrawerProps {
   onProceedToCheckout: () => void;
 }
 
 export const CartDrawer: React.FC<CartDrawerProps> = ({ onProceedToCheckout }) => {
-  const { isCartOpen, setIsCartOpen, items, removeFromCart, totalAmount, itemCount, cartError } = useCart();
+  const { isCartOpen, setIsCartOpen, items, updateQuantity, removeFromCart, totalAmount, itemCount } = useCart();
 
   if (!isCartOpen) return null;
 
@@ -27,12 +27,6 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onProceedToCheckout }) =
             <X className="w-5 h-5" />
           </button>
         </div>
-
-        {cartError && (
-          <div role="alert" className="mt-3 p-3 bg-rose-950/40 border border-rose-800/50 rounded-lg text-xs text-rose-200">
-            {cartError}
-          </div>
-        )}
 
         {/* Items List */}
         <div className="flex-1 overflow-y-auto py-4 space-y-3 pr-1">
@@ -62,12 +56,29 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onProceedToCheckout }) =
                 </div>
 
                 <div className="flex items-center gap-3 shrink-0">
+                  <div className="flex items-center gap-1 bg-white/5 border border-white/10 rounded-md p-0.5">
+                    <button
+                      onClick={() => updateQuantity(item.id, Math.max(0, item.quantity - 1))}
+                      className="p-1 text-zinc-400 hover:text-white rounded hover:bg-white/10 transition-colors cursor-pointer"
+                      title="Menge verringern"
+                    >
+                      <Minus className="w-3 h-3" />
+                    </button>
+                    <span className="font-mono text-2xs px-1.5 text-white">{item.quantity}</span>
+                    <button
+                      onClick={() => updateQuantity(item.id, item.quantity + 1)}
+                      className="p-1 text-zinc-400 hover:text-white rounded hover:bg-white/10 transition-colors cursor-pointer"
+                      title="Menge erhöhen"
+                    >
+                      <Plus className="w-3 h-3" />
+                    </button>
+                  </div>
                   <span className="font-mono text-xs font-bold text-white">
                     {(item.price * item.quantity).toFixed(2)} €
                   </span>
                   <button
                     onClick={() => removeFromCart(item.id)}
-                    className="p-1 text-zinc-500 hover:text-red-400 transition-colors"
+                    className="p-1 text-zinc-500 hover:text-red-400 transition-colors cursor-pointer"
                     title="Entfernen"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -87,7 +98,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({ onProceedToCheckout }) =
 
           <p className="text-2xs text-zinc-500 flex items-center gap-1">
             <Download className="w-3 h-3 text-zinc-400" />
-            <span>Zahlungen sind derzeit nicht verfügbar. Keine Bestellung wird ausgelöst.</span>
+            <span>Sofortiger digitaler Download nach Kaufabschluss.</span>
           </p>
 
           <button

@@ -125,10 +125,25 @@ export async function testDatabaseConnection(): Promise<DatabaseStatus> {
   }
 
   try {
-    const currentPool = getDbPool();
-    const [rows] = await currentPool.query('SELECT 1 as is_alive, VERSION() as version');
+    // Test with a direct connection with strict timeout so we never hang indefinitely on unreachable hosts
+    const connPromise = mysql.createConnection({
+      host: config.db.host,
+      port: config.db.port,
+      user: config.db.user,
+      password: config.db.password,
+      database: config.db.database,
+      connectTimeout: 2000,
+    });
+
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Connection timed out')), 2500)
+    );
+
+    const conn = await Promise.race([connPromise, timeoutPromise]);
+    const [rows] = await conn.query('SELECT 1 as is_alive, VERSION() as version');
     const latency = Date.now() - start;
     const versionStr = Array.isArray(rows) && (rows[0] as any)?.version ? (rows[0] as any).version : 'MariaDB';
+    await conn.end();
 
     lastKnownStatus = {
       connected: true,
@@ -160,7 +175,11 @@ export async function testDatabaseConnection(): Promise<DatabaseStatus> {
  */
 export async function executeQuery<T = any>(sql: string, params: any[] = []): Promise<T[]> {
   const currentPool = getDbPool();
-  const [rows] = await currentPool.execute(sql, params);
+  const queryPromise = currentPool.execute(sql, params);
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error('MariaDB executeQuery timed out')), 4000)
+  );
+  const [rows] = await Promise.race([queryPromise, timeoutPromise]);
   return rows as T[];
 }
 
@@ -169,7 +188,11 @@ export async function executeQuery<T = any>(sql: string, params: any[] = []): Pr
  */
 export async function withTransaction<T>(callback: (connection: PoolConnection) => Promise<T>): Promise<T> {
   const currentPool = getDbPool();
-  const connection = await currentPool.getConnection();
+  const connPromise = currentPool.getConnection();
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error('MariaDB getConnection timed out')), 4000)
+  );
+  const connection = await Promise.race([connPromise, timeoutPromise]);
   try {
     await connection.beginTransaction();
     const result = await callback(connection);

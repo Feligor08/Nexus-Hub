@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { useCart } from '../context/CartContext';
+import { useAuth } from '../context/AuthContext';
+import { api } from '../services/api';
 import { Order } from '../types/platform';
-import { X, CheckCircle, Download, CreditCard, ShieldCheck, ArrowRight, Loader2 } from 'lucide-react';
+import { X, CheckCircle, Download, CreditCard, ShieldCheck, ArrowRight, Loader2, LogIn } from 'lucide-react';
 
 interface CheckoutModalProps {
   isOpen: boolean;
@@ -14,7 +16,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   onClose,
   onOrderCompleted,
 }) => {
-  const { items, totalAmount } = useCart();
+  const { items, totalAmount, clearCart } = useCart();
+  const { isAuthenticated, openAuthModal } = useAuth();
   const [isProcessing, setIsProcessing] = useState(false);
   const [completedOrder, setCompletedOrder] = useState<Order | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -23,12 +26,37 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   if (!isOpen) return null;
 
   const handleDownload = (itemName: string, token: string) => {
-    setDownloadNotice(`Download gestartet für "${itemName}" (Token: ${token})`);
-    setTimeout(() => setDownloadNotice(null), 3500);
+    try {
+      const a = document.createElement('a');
+      a.href = `/api/downloads/file/${token}`;
+      a.download = '';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setDownloadNotice(`Download gestartet für "${itemName}"`);
+      setTimeout(() => setDownloadNotice(null), 3500);
+    } catch (e: any) {
+      setError(`Download fehlgeschlagen: ${e.message}`);
+    }
   };
 
   const handleExecutePayment = async () => {
-    setError('Es ist kein Payment-Provider konfiguriert. Es wurde keine Bestellung erstellt.');
+    if (!isAuthenticated) {
+      openAuthModal('login');
+      return;
+    }
+    setIsProcessing(true);
+    setError(null);
+    try {
+      const order = await api.checkout();
+      setCompletedOrder(order);
+      await clearCart();
+      if (onOrderCompleted) onOrderCompleted(order);
+    } catch (e: any) {
+      setError(e.message || 'Zahlungsabwicklung fehlgeschlagen');
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   return (
@@ -128,14 +156,38 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
             {/* Payment Method Details */}
             <div className="p-3.5 liquid-glass rounded-lg border border-white/10 text-xs space-y-1.5">
-              <div className="flex items-center gap-2 text-zinc-300 font-semibold">
-                <ShieldCheck className="w-4 h-4 text-white" />
-                <span>Keine Zahlungsabwicklung verfügbar</span>
+              <div className="flex items-center justify-between text-zinc-300 font-semibold">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-white" />
+                  <span>Direkte Plattform-Bereitstellung</span>
+                </div>
+                <span className="px-2 py-0.5 rounded text-3xs font-mono font-bold bg-white/10 text-white">
+                  ORDER_CREATED
+                </span>
               </div>
               <p className="text-2xs text-zinc-400 leading-relaxed">
-                Ein Zahlungsanbieter ist nicht konfiguriert. Es werden weder Bestellungen noch Download-Berechtigungen simuliert.
+                Bestellungen werden direkt auf dem Server in MariaDB transaktionssicher protokolliert. Nach Klick auf &quot;Bestellung erstellen&quot; werden deine Download-Entitlements und Token autorisiert.
               </p>
             </div>
+
+            {!isAuthenticated && (
+              <div className="p-3.5 bg-amber-500/10 border border-amber-500/20 rounded-lg flex items-center justify-between gap-3 text-xs text-amber-200">
+                <div className="space-y-0.5">
+                  <div className="font-semibold text-white">Anmeldung erforderlich</div>
+                  <div className="text-2xs text-amber-200/80">
+                    Erstelle ein Konto oder melde dich an, um deine Lizenzen und Downloads zu verwalten.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => openAuthModal('login')}
+                  className="px-3 py-1.5 bg-white text-black font-semibold text-2xs rounded-lg hover:bg-zinc-200 transition-colors shrink-0 cursor-pointer flex items-center gap-1"
+                >
+                  <LogIn className="w-3 h-3" />
+                  <span>Anmelden</span>
+                </button>
+              </div>
+            )}
 
             {/* Action */}
             <div className="flex items-center justify-end gap-3 pt-2">
@@ -143,18 +195,40 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                 type="button"
                 onClick={onClose}
                 disabled={isProcessing}
-                className="px-4 py-2 text-xs font-medium text-zinc-400 hover:text-white transition-colors"
+                className="px-4 py-2 text-xs font-medium text-zinc-400 hover:text-white transition-colors cursor-pointer"
               >
                 Abbrechen
               </button>
-              <button
-                type="button"
-                onClick={handleExecutePayment}
-                disabled
-                className="px-5 py-2.5 bg-white hover:bg-zinc-200 disabled:bg-zinc-800 disabled:text-zinc-600 text-black font-bold text-xs rounded-lg transition-colors flex items-center gap-2 cursor-pointer"
-              >
-                <span>Zahlung derzeit nicht verfügbar</span>
-              </button>
+              {isAuthenticated ? (
+                <button
+                  type="button"
+                  onClick={handleExecutePayment}
+                  disabled={isProcessing || items.length === 0}
+                  className="px-5 py-2.5 bg-white hover:bg-zinc-200 disabled:bg-zinc-800 disabled:text-zinc-600 text-black font-bold text-xs rounded-lg transition-colors flex items-center gap-2 cursor-pointer shadow-lg"
+                >
+                  {isProcessing ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Erstelle Bestellung...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Bestellung erstellen ({totalAmount.toFixed(2)} €)</span>
+                      <ArrowRight className="w-4 h-4" />
+                    </>
+                  )}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => openAuthModal('login')}
+                  disabled={items.length === 0}
+                  className="px-5 py-2.5 bg-white hover:bg-zinc-200 disabled:bg-zinc-800 disabled:text-zinc-600 text-black font-bold text-xs rounded-lg transition-colors flex items-center gap-2 cursor-pointer shadow-lg"
+                >
+                  <LogIn className="w-4 h-4" />
+                  <span>Anmelden zum Bestellen</span>
+                </button>
+              )}
             </div>
           </div>
         )}
