@@ -1,5 +1,4 @@
 -- NEXUS CODE PLAY — COMMUNITY REPORTS & MODERATION (010_community_reports.sql)
-USE nexus_code_play;
 
 CREATE TABLE IF NOT EXISTS community_reports (
   id VARCHAR(64) PRIMARY KEY,

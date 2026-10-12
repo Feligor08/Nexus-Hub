@@ -3,8 +3,6 @@
 -- Adds Content Lifecycle (DRAFT, PUBLISHED, ARCHIVED), Media, Versions & Entitlements
 -- ==============================================================================
 
-USE nexus_code_play;
-
 -- 1. Extend projects table with CMS lifecycle columns
 ALTER TABLE projects 
   ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'DRAFT',

@@ -2,13 +2,8 @@
 -- NEXUS CODE PLAY — MARIADB INITIAL SCHEMA (001_initial_schema.sql)
 -- Target Server: HP EliteDesk 800 G3 Mini (Ubuntu Server / CasaOS / Docker)
 -- Database Engine: InnoDB | Character Set: utf8mb4 | Collation: utf8mb4_unicode_ci
+-- Note: Database initialization (CREATE DATABASE) is managed externally by DBA setup.
 -- ==============================================================================
-
-CREATE DATABASE IF NOT EXISTS nexus_code_play
-  CHARACTER SET utf8mb4
-  COLLATE utf8mb4_unicode_ci;
-
-USE nexus_code_play;
 
 -- -------------------------------------------------------------
 -- 1. ROLES & RBAC

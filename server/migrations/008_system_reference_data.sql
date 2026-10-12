@@ -1,5 +1,4 @@
 -- Idempotent system reference data only. No users or content are seeded here.
-USE nexus_code_play;
 
 INSERT IGNORE INTO roles (id, name, description) VALUES
   ('GUEST', 'Guest', 'Unauthenticated visitor with read-only access'),

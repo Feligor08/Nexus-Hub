@@ -3,12 +3,9 @@
 -- Adds Creator Application Workflow and Account Profile fields (location, website)
 -- ==============================================================================
 
-USE nexus_code_play;
-
 -- 1. Add location and website fields to users table if not existing
-ALTER TABLE users
-  ADD COLUMN IF NOT EXISTS location VARCHAR(150) NULL,
-  ADD COLUMN IF NOT EXISTS website VARCHAR(255) NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS location VARCHAR(150) NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS website VARCHAR(255) NULL;
 
 -- 2. Creator Applications Table
 CREATE TABLE IF NOT EXISTS creator_applications (

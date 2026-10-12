@@ -1,5 +1,4 @@
 -- Additive Product CMS and media storage schema; existing records are preserved.
-USE nexus_code_play;
 
 ALTER TABLE media_files
   ADD COLUMN IF NOT EXISTS storage_key VARCHAR(128) NULL;

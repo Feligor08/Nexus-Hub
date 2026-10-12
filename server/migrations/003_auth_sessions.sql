@@ -3,8 +3,6 @@
 -- Target Server: HP EliteDesk 800 G3 Mini (MariaDB 11 / CasaOS / Docker)
 -- ==============================================================================
 
-USE nexus_code_play;
-
 -- 1. Create User Sessions table for server-side stateful session governance
 CREATE TABLE IF NOT EXISTS user_sessions (
   id VARCHAR(64) PRIMARY KEY,

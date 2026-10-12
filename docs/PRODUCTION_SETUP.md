@@ -21,8 +21,8 @@ Folgende Variablen müssen in der Produktionsumgebung (`.env` auf dem Server ode
 | `NODE_ENV` | `production` |
 | `PORT` | Port für Express-Server (Standard: `3000`) |
 | `APP_URL` | Öffentliche Basis-URL: `https://www.fs-nexus-systems.de` |
-| `SESSION_SECRET` | Kryptografisch zufälliger String zur Sitzungssignierung |
-| `JWT_SECRET` | Optionaler zusätzlicher Signaturschlüssel |
+| `SESSION_SECRET` | Kryptografisch zufälliger String zur Sitzungssignierung (Zwingend erforderlich in Produktion) |
+| `JWT_SECRET` | Kryptografisch zufälliger Signaturschlüssel (Zwingend erforderlich in Produktion; kein unsicherer Fallback) |
 | `DB_HOST` | Host oder Tailscale-IP des MariaDB-Servers (z.B. `100.x.x.x` oder `127.0.0.1`) |
 | `DB_PORT` | MariaDB-Port (Standard: `3306`) |
 | `DB_NAME` | Datenbankname (z.B. `nexus_code_play`) |
@@ -43,11 +43,13 @@ Folgende Variablen müssen in der Produktionsumgebung (`.env` auf dem Server ode
 
 1. **Keine öffentlichen Ports:** Der Port `3306` darf unter keinen Umständen über die öffentliche Firewall freigegeben werden.
 2. **Tailscale / Privates Netz:** Der Zugriff zwischen Anwendungs-Server und separatem MariaDB-Host erfolgt über das interne Tailscale-Interface (IP `100.x.x.x`) oder über ein lokales Docker-Netzwerk (`bridge`/`overlay`).
-3. **Unprivilegierter Nutzer:**
+3. **Initiale Datenbankerstellung & Berechtigungen (DBA-Einrichtung):**
+   Die Datenbankerstellung und Benutzerberechtigung erfolgt einmalig durch den Datenbankadministrator. Die Anwendungs-Migrationen setzen keine globalen Administratorrechte voraus.
    ```sql
+   -- Einmalige administrative Einrichtung durch Root/DBA:
    CREATE DATABASE IF NOT EXISTS nexus_code_play CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
    CREATE USER IF NOT EXISTS 'nexus_app'@'%' IDENTIFIED BY '<SicheresPasswort>';
-   GRANT SELECT, INSERT, UPDATE, DELETE ON nexus_code_play.* TO 'nexus_app'@'%';
+   GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES ON nexus_code_play.* TO 'nexus_app'@'%';
    FLUSH PRIVILEGES;
    ```
 4. **Verbindungspooling:** Der Verbindungsaufbau nutzt ein Keepalive-fähiges Pool-Management (`mysql2/promise`) mit automatischer Reconnect-Behandlung und 2000ms TCP-Timeout-Drosselung bei Netzausfall.

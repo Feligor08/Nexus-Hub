@@ -11,7 +11,7 @@ export const config = {
   isProd,
   port: Number(process.env.PORT) || 3000,
   appUrl: process.env.APP_URL || (isProd ? 'https://www.fs-nexus-systems.de' : 'http://localhost:3000'),
-  sessionSecret: process.env.SESSION_SECRET || process.env.JWT_SECRET || 'nexus-dev-insecure-secret-key-change-in-prod',
+  sessionSecret: process.env.SESSION_SECRET || (isProd ? '' : 'nexus-dev-insecure-secret-key-change-in-prod'),
   mediaStoragePath: MEDIA_STORAGE_PATH,
   db: {
     host: process.env.DB_HOST?.trim() || 'DB_HOST_NOT_CONFIGURED',
@@ -27,7 +27,7 @@ export const config = {
     apiKey: process.env.GEMINI_API_KEY || '',
   },
   jwt: {
-    secret: process.env.JWT_SECRET || process.env.SESSION_SECRET || 'nexus-dev-insecure-secret-key-change-in-prod',
+    secret: process.env.JWT_SECRET || (isProd ? '' : 'nexus-dev-insecure-secret-key-change-in-prod'),
   },
 };
 
@@ -50,19 +50,27 @@ export function validateEnvironmentConfig(strict = isProd, customEnv = process.e
   const insecurePlaceholders = [
     'nexus-dev-insecure-secret-key-change-in-prod',
     'your-session-secret-key-change-in-prod',
+    'your-jwt-secure-random-secret',
     'your-secure-database-password',
     'your-gemini-api-key',
   ];
 
-  const sessionSecret = customEnv.SESSION_SECRET || customEnv.JWT_SECRET || (strict ? '' : config.sessionSecret);
+  const sessionSecret = customEnv.SESSION_SECRET || (strict ? '' : config.sessionSecret);
+  const jwtSecret = customEnv.JWT_SECRET || (strict ? '' : config.jwt.secret);
   const dbHost = customEnv.DB_HOST?.trim() || (strict ? '' : config.db.host);
   const dbPassword = customEnv.DB_PASSWORD || '';
 
   if (strict) {
     if (!sessionSecret) {
-      errors.push('SESSION_SECRET oder JWT_SECRET ist in Produktionsumgebungen zwingend erforderlich.');
+      errors.push('SESSION_SECRET ist in Produktionsumgebungen zwingend erforderlich.');
     } else if (insecurePlaceholders.includes(sessionSecret)) {
       errors.push('SESSION_SECRET verwendet einen bekannten Standard-Platzhalter. Bitte ein sicheres Produktionsgeheimnis generieren.');
+    }
+
+    if (!jwtSecret) {
+      errors.push('JWT_SECRET ist in Produktionsumgebungen zwingend erforderlich.');
+    } else if (insecurePlaceholders.includes(jwtSecret)) {
+      errors.push('JWT_SECRET verwendet einen bekannten Standard-Platzhalter. Bitte ein sicheres Produktionsgeheimnis generieren.');
     }
 
     if (!dbHost || dbHost === 'DB_HOST_NOT_CONFIGURED') {
@@ -75,6 +83,9 @@ export function validateEnvironmentConfig(strict = isProd, customEnv = process.e
   } else {
     if (insecurePlaceholders.includes(sessionSecret)) {
       warnings.push('Entwicklungsmodus: Verwende für die Produktion ein individuelles SESSION_SECRET.');
+    }
+    if (insecurePlaceholders.includes(jwtSecret)) {
+      warnings.push('Entwicklungsmodus: Verwende für die Produktion ein individuelles JWT_SECRET.');
     }
   }
 

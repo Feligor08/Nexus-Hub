@@ -265,7 +265,20 @@ describe('Security, IDOR & Authorization Audit (Sprint 9)', () => {
       const result = validateEnvironmentConfig(true, {});
       expect(result.valid).toBe(false);
       expect(result.errors.length).toBeGreaterThan(0);
-      expect(result.errors.some((e) => e.includes('SESSION_SECRET') || e.includes('DB_HOST'))).toBe(true);
+      expect(result.errors.some((e) => e.includes('SESSION_SECRET'))).toBe(true);
+      expect(result.errors.some((e) => e.includes('JWT_SECRET'))).toBe(true);
+      expect(result.errors.some((e) => e.includes('DB_HOST'))).toBe(true);
+    });
+
+    it('rejects default insecure JWT_SECRET placeholder in production', () => {
+      const result = validateEnvironmentConfig(true, {
+        SESSION_SECRET: 'super-secure-production-session-secret-random-32-chars',
+        JWT_SECRET: 'your-jwt-secure-random-secret',
+        DB_HOST: '100.70.45.109',
+        DB_PASSWORD: 'real-password',
+      });
+      expect(result.valid).toBe(false);
+      expect(result.errors.some((e) => e.includes('JWT_SECRET'))).toBe(true);
     });
 
     it('passes development configuration gracefully with guidance warnings', () => {

@@ -3,8 +3,6 @@
 -- Seeds initial system roles, default users, projects, products & tech stack
 -- ==============================================================================
 
-USE nexus_code_play;
-
 -- 1. Standard Roles
 INSERT IGNORE INTO roles (id, name, description) VALUES
   ('GUEST', 'Guest', 'Unauthenticated visitor with read-only access'),

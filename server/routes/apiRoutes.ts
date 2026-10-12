@@ -24,6 +24,7 @@ import {
   recordSuccessfulLogin,
 } from '../middleware/rateLimitMiddleware';
 import { mediaStorage, getUploadCategory } from '../services/mediaStorage';
+import { config } from '../config/env';
 import { db } from '../db';
 import { User, Order, ProductVersion } from '../models/types';
 
@@ -42,15 +43,13 @@ const ai = new GoogleGenAI({
   },
 });
 
-const isProd = process.env.NODE_ENV === 'production';
-
 const setSessionCookie = (res: Response, token: string) => {
-  const flags = `Path=/; HttpOnly; SameSite=Lax; Max-Age=${30 * 24 * 3600}${isProd ? '; Secure' : ''}`;
+  const flags = `Path=/; HttpOnly; SameSite=Lax; Max-Age=${30 * 24 * 3600}${config.isProd ? '; Secure' : ''}`;
   res.setHeader('Set-Cookie', `nexus_session=${token}; ${flags}`);
 };
 
 const clearSessionCookie = (res: Response) => {
-  const flags = `Path=/; HttpOnly; SameSite=Lax; Max-Age=0${isProd ? '; Secure' : ''}`;
+  const flags = `Path=/; HttpOnly; SameSite=Lax; Max-Age=0${config.isProd ? '; Secure' : ''}`;
   res.setHeader('Set-Cookie', `nexus_session=; ${flags}`);
 };
 

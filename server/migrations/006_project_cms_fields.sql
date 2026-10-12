@@ -1,9 +1,7 @@
 -- Additive Project CMS fields; existing project content is preserved.
-USE nexus_code_play;
 
-ALTER TABLE projects
-  ADD COLUMN IF NOT EXISTS case_study_goal TEXT NULL,
-  ADD COLUMN IF NOT EXISTS case_study_result TEXT NULL;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS case_study_goal TEXT NULL;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS case_study_result TEXT NULL;
 
 CREATE TABLE IF NOT EXISTS project_gallery_images (
   project_id VARCHAR(64) NOT NULL,

@@ -3,8 +3,6 @@
 -- Safely removes initial demo seed data by specific IDs without wiping real user records.
 -- ==============================================================================
 
-USE nexus_code_play;
-
 -- 1. Remove specific demo comments & posts
 DELETE FROM comments WHERE id IN ('comm-alex-tailscale');
 DELETE FROM posts WHERE id IN ('post-elitedesk-tailscale', 'post-8051-timer-calculator');
