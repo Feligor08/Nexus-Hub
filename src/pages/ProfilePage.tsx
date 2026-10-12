@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
-import { PublicProfile, Project } from '../types/platform';
+import { PublicProfile, Project, Product } from '../types/platform';
 import { ProfileEditModal } from '../components/ProfileEditModal';
 import {
   User as UserIcon,
@@ -15,20 +15,25 @@ import {
   Shield,
   Briefcase,
   Edit3,
+  MapPin,
+  ShoppingBag,
 } from 'lucide-react';
 
 interface ProfilePageProps {
   username?: string;
   onNavigateToProject?: (slug: string) => void;
+  onNavigateToProduct?: (slug: string) => void;
 }
 
 export const ProfilePage: React.FC<ProfilePageProps> = ({
   username,
   onNavigateToProject,
+  onNavigateToProduct,
 }) => {
   const { currentUser } = useAuth();
   const [user, setUser] = useState<PublicProfile | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
 
@@ -38,14 +43,20 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
     if (!targetUsername) {
       setUser(null);
       setProjects([]);
+      setProducts([]);
       setIsLoading(false);
       return;
     }
     setIsLoading(true);
-    Promise.all([api.getUserByUsername(targetUsername), api.getProjects()])
-      .then(([userData, projectsData]) => {
+    Promise.all([
+      api.getUserByUsername(targetUsername),
+      api.getProjects(),
+      api.getProducts().catch(() => []),
+    ])
+      .then(([userData, projectsData, productsData]) => {
         setUser(userData);
         setProjects(projectsData.filter((p) => p.authorId === userData.id));
+        setProducts(productsData.filter((p) => p.authorId === userData.id));
       })
       .catch(console.error)
       .finally(() => setIsLoading(false));
@@ -91,7 +102,18 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
               <div className="flex flex-wrap items-center gap-2">
                 <h1 className="text-2xl font-bold text-white">{user.displayName}</h1>
               </div>
-              <p className="text-xs text-zinc-400">@{user.username}</p>
+              <p className="text-xs text-zinc-400 flex items-center gap-2">
+                <span>@{user.username}</span>
+                {user.location && (
+                  <>
+                    <span>·</span>
+                    <span className="flex items-center gap-1 text-zinc-300">
+                      <MapPin className="w-3 h-3 text-zinc-400" />
+                      <span>{user.location}</span>
+                    </span>
+                  </>
+                )}
+              </p>
               <p className="text-xs text-zinc-300 leading-relaxed max-w-xl pt-1">{user.bio}</p>
             </div>
           </div>
@@ -132,13 +154,13 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
         </div>
 
         {/* Badges strip */}
-        {user.badges?.length > 0 && (
+        {(user.badges?.length ?? 0) > 0 && (
           <div className="pt-4 border-t border-white/10">
             <span className="text-2xs font-semibold uppercase tracking-wider text-zinc-400 block mb-2">
               Verifizierte Auszeichnungen &amp; Rollen:
             </span>
             <div className="flex flex-wrap gap-2">
-              {user.badges.map((b, idx) => (
+              {user.badges?.map((b: string, idx: number) => (
                 <span
                   key={idx}
                   className="flex items-center gap-1.5 px-3 py-1 bg-white/5 border border-white/15 rounded-md text-2xs font-medium text-white shadow-xs"
@@ -158,7 +180,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
           <span className="text-2xs font-semibold uppercase tracking-wider text-zinc-400">Kernkompetenzen</span>
           <h3 className="text-sm font-bold text-white">IT- &amp; Entwicklungs-Schwerpunkte</h3>
           <div className="flex flex-wrap gap-1.5 pt-1">
-            {user.skills?.map((s, idx) => (
+            {user.skills?.map((s: string, idx: number) => (
               <span key={idx} className="px-2.5 py-1 text-xs bg-white/5 border border-white/10 rounded text-zinc-200">
                 {s}
               </span>
@@ -170,7 +192,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
           <span className="text-2xs font-semibold uppercase tracking-wider text-zinc-400">Technologie-Stack</span>
           <h3 className="text-sm font-bold text-white">Werkzeuge &amp; Frameworks</h3>
           <div className="flex flex-wrap gap-1.5 pt-1">
-            {user.technologies?.map((t, idx) => (
+            {user.technologies?.map((t: string, idx: number) => (
               <span key={idx} className="px-2.5 py-1 text-xs font-mono bg-white/5 border border-white/10 rounded text-zinc-300">
                 {t}
               </span>
@@ -202,6 +224,38 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
                 </div>
                 <h4 className="text-xs font-bold text-white">{proj.title}</h4>
                 <p className="text-2xs text-zinc-400 line-clamp-2">{proj.shortDesc}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Published Products by this user */}
+      <div className="p-6 liquid-glass rounded-xl border border-white/10 space-y-4">
+        <div className="flex items-center justify-between pb-3 border-b border-white/10">
+          <h3 className="text-sm font-bold text-white flex items-center gap-2">
+            <ShoppingBag className="w-4 h-4 text-white" />
+            <span>Store-Produkte &amp; Downloads von @{user.username}</span>
+          </h3>
+          <span className="text-2xs text-zinc-400">{products.length} Produkte</span>
+        </div>
+
+        {products.length === 0 ? (
+          <p className="text-xs text-zinc-500 py-4 text-center">Noch keine Store-Produkte veröffentlicht.</p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {products.map((prod) => (
+              <div
+                key={prod.id}
+                onClick={() => onNavigateToProduct && onNavigateToProduct(prod.slug)}
+                className="p-4 liquid-glass-subtle rounded-lg border border-white/5 hover:border-white/15 cursor-pointer space-y-2 transition-colors"
+              >
+                <div className="flex items-center justify-between text-2xs text-zinc-400">
+                  <span>{prod.category}</span>
+                  <span className="font-mono text-emerald-400 font-bold">{prod.price.toFixed(2)} €</span>
+                </div>
+                <h4 className="text-xs font-bold text-white">{prod.name}</h4>
+                <p className="text-2xs text-zinc-400 line-clamp-2">{prod.shortDesc}</p>
               </div>
             ))}
           </div>

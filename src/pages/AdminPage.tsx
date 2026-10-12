@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
-import { AdminStats, User, AuditLog, SystemHealthData } from '../types/platform';
+import { AdminStats, User, AuditLog, SystemHealthData, CreatorApplication, CommunityReport } from '../types/platform';
 import {
   Shield,
   Users,
@@ -17,40 +17,59 @@ import {
   Layers,
   Network,
   Lock,
+  Sparkles,
+  Check,
+  X,
+  FileText,
+  AlertCircle,
+  Flag,
+  Trash2,
 } from 'lucide-react';
 
 export const AdminPage: React.FC = () => {
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [creatorApps, setCreatorApps] = useState<CreatorApplication[]>([]);
+  const [reports, setReports] = useState<CommunityReport[]>([]);
   const [systemHealth, setSystemHealth] = useState<SystemHealthData | null>(null);
-  const [activeTab, setActiveTab] = useState<'infrastructure' | 'users' | 'logs'>('infrastructure');
+  const [activeTab, setActiveTab] = useState<'infrastructure' | 'users' | 'creator-apps' | 'reports' | 'logs'>('infrastructure');
   const [isLoading, setIsLoading] = useState(true);
   const [migrationStatus, setMigrationStatus] = useState<string | null>(null);
   const [isMigrating, setIsMigrating] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  // Review state
+  const [appNotes, setAppNotes] = useState<Record<string, string>>({});
+  const [reportNotes, setReportNotes] = useState<Record<string, string>>({});
+
   const loadAdminData = async () => {
     setIsLoading(true);
     setLoadError(null);
     try {
-      const [s, u, l, h] = await Promise.all([
+      const [s, u, l, h, appsRes, repsRes] = await Promise.all([
         api.getAdminStats(),
         api.getAdminUsers(),
         api.getAdminAuditLogs(),
         api.getSystemHealth(),
+        api.getAdminCreatorApplications().then((r) => r.applications).catch(() => []),
+        api.getAdminReports().catch(() => []),
       ]);
       setStats(s);
       setUsers(u);
       setAuditLogs(l);
       setSystemHealth(h);
-    } catch (e) {
+      setCreatorApps(appsRes);
+      setReports(repsRes);
+    } catch (e: any) {
       console.error('Failed to load admin data:', e);
       setLoadError(e instanceof Error ? e.message : 'Admin-Daten konnten nicht geladen werden.');
       setStats(null);
       setUsers([]);
       setAuditLogs([]);
       setSystemHealth(null);
+      setCreatorApps([]);
+      setReports([]);
     } finally {
       setIsLoading(false);
     }
@@ -64,8 +83,8 @@ export const AdminPage: React.FC = () => {
     try {
       const updated = await api.updateAdminUserRole(userId, newRole);
       setUsers((prev) => prev.map((u) => (u.id === userId ? updated : u)));
-    } catch (e) {
-      console.error('Failed to update role:', e);
+    } catch (e: any) {
+      alert(e.message || 'Rollenänderung fehlgeschlagen');
     }
   };
 
@@ -73,8 +92,47 @@ export const AdminPage: React.FC = () => {
     try {
       const updated = await api.toggleAdminUserStatus(userId);
       setUsers((prev) => prev.map((u) => (u.id === userId ? updated : u)));
-    } catch (e) {
-      console.error('Failed to toggle status:', e);
+    } catch (e: any) {
+      alert(e.message || 'Statusänderung fehlgeschlagen');
+    }
+  };
+
+  const handleReviewCreatorApp = async (id: string, status: 'APPROVED' | 'REJECTED') => {
+    const notes = appNotes[id] || '';
+    try {
+      await api.reviewCreatorApplication(id, status, notes);
+      setCreatorApps((prev) =>
+        prev.map((a) => (a.id === id ? { ...a, status, adminNotes: notes, reviewedAt: new Date().toISOString() } : a))
+      );
+      const updatedUsers = await api.getAdminUsers();
+      setUsers(updatedUsers);
+    } catch (err: any) {
+      alert(err.message || 'Bewerbungsprüfung fehlgeschlagen');
+    }
+  };
+
+  const handleReviewReport = async (id: string, status: 'RESOLVED' | 'DISMISSED') => {
+    const notes = reportNotes[id] || '';
+    try {
+      await api.reviewReport(id, status, notes);
+      setReports((prev) =>
+        prev.map((r) => (r.id === id ? { ...r, status, reviewNotes: notes, resolvedAt: new Date().toISOString() } : r))
+      );
+    } catch (err: any) {
+      alert(err.message || 'Meldungsbearbeitung fehlgeschlagen');
+    }
+  };
+
+  const handleDeleteReportedPost = async (postId: string, reportId: string) => {
+    if (!confirm('Diesen gemeldeten Beitrag wirklich löschen?')) return;
+    try {
+      await api.deletePost(postId);
+      await api.reviewReport(reportId, 'RESOLVED', 'Beitrag durch Administrator gelöscht');
+      setReports((prev) =>
+        prev.map((r) => (r.id === reportId ? { ...r, status: 'RESOLVED', reviewNotes: 'Beitrag gelöscht' } : r))
+      );
+    } catch (err: any) {
+      alert(err.message || 'Löschen fehlgeschlagen');
     }
   };
 
@@ -98,6 +156,8 @@ export const AdminPage: React.FC = () => {
   };
 
   const isDbConnected = systemHealth?.database?.connected;
+  const pendingAppsCount = creatorApps.filter((a) => a.status === 'PENDING').length;
+  const pendingReportsCount = reports.filter((r) => r.status === 'PENDING').length;
 
   return (
     <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 space-y-8 animate-in fade-in duration-150">
@@ -112,7 +172,7 @@ export const AdminPage: React.FC = () => {
             <span>Nexus Administration &amp; Governance</span>
           </h1>
           <p className="text-xs text-zinc-400 mt-0.5">
-            MariaDB Datenbank-Engine, HP EliteDesk Server-Infrastruktur, Rollenverwaltung &amp; Audit-Logs.
+            MariaDB Datenbank-Engine, HP EliteDesk Server-Infrastruktur, Creator-Anträge &amp; Audit-Logs.
           </p>
         </div>
 
@@ -166,9 +226,14 @@ export const AdminPage: React.FC = () => {
         </div>
 
         <div className="p-4 glass-1 rounded-xl border border-white/10 space-y-1">
-          <span className="text-2xs text-zinc-400 font-medium block">Store Bestellungen</span>
-          <span className="font-mono text-xl font-bold text-white block mt-1">{stats?.totalOrders ?? 0}</span>
-          <span className="text-2xs text-zinc-500">Digitale Tokens aktiv</span>
+          <span className="text-2xs text-zinc-400 font-medium block">Creator-Bewerbungen</span>
+          <span className="font-mono text-xl font-bold text-white block mt-1">
+            {creatorApps.length}
+            {pendingAppsCount > 0 && (
+              <span className="ml-2 text-2xs text-amber-400 font-sans font-semibold">({pendingAppsCount} offen)</span>
+            )}
+          </span>
+          <span className="text-2xs text-zinc-500">Workflow &amp; Audit</span>
         </div>
 
         <div className="p-4 glass-1 rounded-xl border border-white/10 space-y-1">
@@ -179,10 +244,10 @@ export const AdminPage: React.FC = () => {
       </div>
 
       {/* Admin Tabs */}
-      <div className="flex items-center gap-2 border-b border-white/10 pb-3">
+      <div className="flex items-center gap-2 border-b border-white/10 pb-3 overflow-x-auto scrollbar-none">
         <button
           onClick={() => setActiveTab('infrastructure')}
-          className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 ${
+          className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
             activeTab === 'infrastructure' ? 'bg-white text-black' : 'text-zinc-400 hover:text-white'
           }`}
         >
@@ -192,7 +257,7 @@ export const AdminPage: React.FC = () => {
 
         <button
           onClick={() => setActiveTab('users')}
-          className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 ${
+          className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
             activeTab === 'users' ? 'bg-white text-black' : 'text-zinc-400 hover:text-white'
           }`}
         >
@@ -201,8 +266,34 @@ export const AdminPage: React.FC = () => {
         </button>
 
         <button
+          onClick={() => setActiveTab('creator-apps')}
+          className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap relative ${
+            activeTab === 'creator-apps' ? 'bg-white text-black' : 'text-zinc-400 hover:text-white'
+          }`}
+        >
+          <Sparkles className="w-3.5 h-3.5" />
+          <span>Creator-Anträge ({creatorApps.length})</span>
+          {pendingAppsCount > 0 && (
+            <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+          )}
+        </button>
+
+        <button
+          onClick={() => setActiveTab('reports')}
+          className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap relative ${
+            activeTab === 'reports' ? 'bg-white text-black' : 'text-zinc-400 hover:text-white'
+          }`}
+        >
+          <Flag className="w-3.5 h-3.5" />
+          <span>Moderation &amp; Meldungen ({reports.length})</span>
+          {pendingReportsCount > 0 && (
+            <span className="w-2 h-2 rounded-full bg-rose-400"></span>
+          )}
+        </button>
+
+        <button
           onClick={() => setActiveTab('logs')}
-          className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 ${
+          className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
             activeTab === 'logs' ? 'bg-white text-black' : 'text-zinc-400 hover:text-white'
           }`}
         >
@@ -214,7 +305,6 @@ export const AdminPage: React.FC = () => {
       {/* Tab 1: INFRASTRUCTURE & MARIADB */}
       {activeTab === 'infrastructure' && (
         <div className="space-y-6">
-          {/* Migration notification */}
           {migrationStatus && (
             <div className="p-3 bg-white/10 border border-white/20 rounded-xl text-xs text-white flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 shrink-0 text-white" />
@@ -242,7 +332,7 @@ export const AdminPage: React.FC = () => {
                   onClick={handleRunMigrations}
                   disabled={isMigrating}
                   className="flex items-center gap-1.5 px-3 py-1.5 btn-primary text-2xs font-semibold rounded-lg transition-colors cursor-pointer disabled:opacity-50"
-                  title="Führt 001_initial_schema.sql und 002_seed_initial_data.sql auf MariaDB aus"
+                  title="Führt Migrationen auf MariaDB aus"
                 >
                   <Play className="w-3 h-3" />
                   <span>{isMigrating ? 'Führe aus...' : 'Schema Migrationen anwenden'}</span>
@@ -298,27 +388,15 @@ export const AdminPage: React.FC = () => {
               ].map((svc, idx) => (
                 <div key={idx} className="p-3 bg-white/[0.02] border border-white/10 rounded-xl flex items-center justify-between">
                   <div className="space-y-0.5">
-                    <span className="text-xs font-semibold text-white block">{svc.name}</span>
-                    <span className="text-2xs text-zinc-400">{svc.note}</span>
+                    <span className="font-medium text-xs text-white block">{svc.name}</span>
+                    <span className="text-3xs text-zinc-400">{svc.note}</span>
                   </div>
-                  <span className="px-2 py-0.5 text-2xs font-mono font-bold bg-white/10 text-white rounded">
+                  <span className="px-2 py-0.5 text-3xs font-mono font-bold bg-white/10 text-white rounded">
                     {svc.status}
                   </span>
                 </div>
               ))}
             </div>
-          </div>
-
-          {/* Backup & Governance Summary (Sections 43-48) */}
-          <div className="p-6 glass-1 rounded-2xl border border-white/10 space-y-3">
-            <h3 className="text-sm font-bold text-white flex items-center gap-2">
-              <HardDrive className="w-4 h-4 text-white" />
-              <span>MariaDB Backup-Strategie &amp; Archivierung</span>
-            </h3>
-            <p className="text-xs text-zinc-400 leading-relaxed">
-              Automatisierte <code className="text-zinc-200 font-mono">mysqldump</code> Backups laufen täglich um 02:00 Uhr via n8n / Cronjob auf dem HP EliteDesk Mini.
-              Aufbewahrung: <strong className="text-zinc-200">Daily (7 Tage)</strong>, <strong className="text-zinc-200">Weekly (4 Wochen)</strong> und <strong className="text-zinc-200">Monthly (6 Monate)</strong>. Keine unverschlüsselten Secrets im Dateisystem.
-            </p>
           </div>
         </div>
       )}
@@ -390,7 +468,210 @@ export const AdminPage: React.FC = () => {
         </div>
       )}
 
-      {/* Tab 3: AUDIT LOGS */}
+      {/* Tab: CREATOR APPLICATIONS */}
+      {activeTab === 'creator-apps' && (
+        <div className="space-y-4">
+          {creatorApps.length === 0 ? (
+            <div className="p-12 text-center text-zinc-500 liquid-glass rounded-xl border border-white/10">
+              <Sparkles className="w-10 h-10 mx-auto mb-2 text-zinc-600 stroke-[1.5]" />
+              <p className="text-sm font-semibold text-zinc-300">Keine Creator-Anträge vorhanden</p>
+              <p className="text-xs text-zinc-500 mt-1">Bewerbungen von Nutzern erscheinen hier zur Überprüfung.</p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {creatorApps.map((app) => (
+                <div
+                  key={app.id}
+                  className="p-6 liquid-glass rounded-xl border border-white/10 space-y-4"
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-white/10">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 rounded-lg bg-white/10 text-white">
+                        <Users className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-bold text-white">
+                          Bewerbung von @{app.userUsername || app.userId}
+                        </h4>
+                        <span className="text-2xs text-zinc-400 font-mono">
+                          Eingereicht am {new Date(app.createdAt).toLocaleDateString('de-DE')} {app.userEmail && `· ${app.userEmail}`}
+                        </span>
+                      </div>
+                    </div>
+
+                    <span
+                      className={`px-2.5 py-1 text-2xs font-mono font-bold rounded-full self-start sm:self-center ${
+                        app.status === 'APPROVED'
+                          ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-800/40'
+                          : app.status === 'REJECTED'
+                          ? 'bg-rose-950/60 text-rose-300 border border-rose-800/40'
+                          : 'bg-amber-950/60 text-amber-300 border border-amber-800/40'
+                      }`}
+                    >
+                      {app.status}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                    <div className="p-3 rounded-lg bg-black/40 border border-white/5 space-y-1">
+                      <span className="text-2xs font-mono text-zinc-400 uppercase tracking-wider block">Motivation</span>
+                      <p className="text-zinc-200 whitespace-pre-wrap">{app.motivation}</p>
+                    </div>
+
+                    <div className="p-3 rounded-lg bg-black/40 border border-white/5 space-y-1">
+                      <span className="text-2xs font-mono text-zinc-400 uppercase tracking-wider block">Geplante Projekte</span>
+                      <p className="text-zinc-200 whitespace-pre-wrap">{app.plannedProjects}</p>
+                    </div>
+
+                    <div className="p-3 rounded-lg bg-black/40 border border-white/5 space-y-1">
+                      <span className="text-2xs font-mono text-zinc-400 uppercase tracking-wider block">Geplante Inhalte</span>
+                      <p className="text-zinc-200 whitespace-pre-wrap">{app.plannedContent}</p>
+                      {app.portfolioUrl && (
+                        <div className="pt-2 border-t border-white/5">
+                          <a href={app.portfolioUrl} target="_blank" rel="noreferrer" className="text-zinc-300 underline text-2xs">
+                            Portfolio / Link
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {app.adminNotes && (
+                    <div className="p-3 rounded-lg bg-white/[0.02] border border-white/5 text-2xs text-zinc-400">
+                      <span className="font-semibold text-zinc-300 block">Notizen / Begründung:</span>
+                      <p className="mt-0.5">{app.adminNotes}</p>
+                    </div>
+                  )}
+
+                  {/* Action Bar for Pending Applications */}
+                  {app.status === 'PENDING' && (
+                    <div className="pt-3 border-t border-white/10 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                      <input
+                        type="text"
+                        placeholder="Begründung oder Admin-Notiz eingeben (optional)..."
+                        value={appNotes[app.id] || ''}
+                        onChange={(e) => setAppNotes({ ...appNotes, [app.id]: e.target.value })}
+                        className="flex-1 px-3 py-1.5 bg-black/40 border border-white/10 rounded-lg text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-white/30"
+                      />
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          onClick={() => handleReviewCreatorApp(app.id, 'REJECTED')}
+                          className="px-3.5 py-1.5 bg-rose-950/60 hover:bg-rose-900 border border-rose-800/50 text-rose-200 text-xs font-semibold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                          <span>Ablehnen</span>
+                        </button>
+                        <button
+                          onClick={() => handleReviewCreatorApp(app.id, 'APPROVED')}
+                          className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-black text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Genehmigen &amp; Rolle zuweisen</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Tab: MODERATION & REPORTS */}
+      {activeTab === 'reports' && (
+        <div className="space-y-4">
+          {reports.length === 0 ? (
+            <div className="p-12 text-center text-zinc-500 liquid-glass rounded-xl border border-white/10">
+              <Flag className="w-10 h-10 mx-auto mb-2 text-zinc-600 stroke-[1.5]" />
+              <p className="text-sm font-semibold text-zinc-300">Keine gemeldeten Beiträge</p>
+              <p className="text-xs text-zinc-500 mt-1">Community-Meldungen erscheinen hier zur Überprüfung.</p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {reports.map((rep) => (
+                <div
+                  key={rep.id}
+                  className="p-5 liquid-glass rounded-xl border border-white/10 space-y-3"
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-white/10">
+                    <div className="flex items-center gap-2 text-xs">
+                      <Flag className="w-4 h-4 text-rose-400" />
+                      <span className="font-bold text-white">
+                        {rep.postId ? `Beitrag: "${rep.postTitle || rep.postId}"` : `Kommentar gemeldet`}
+                      </span>
+                      <span className="text-zinc-500">·</span>
+                      <span className="text-zinc-400 text-2xs">
+                        Gemeldet von @{rep.reporterUsername || rep.reporterId} ({new Date(rep.createdAt).toLocaleDateString('de-DE')})
+                      </span>
+                    </div>
+
+                    <span
+                      className={`px-2 py-0.5 text-2xs font-mono font-bold rounded-full ${
+                        rep.status === 'RESOLVED'
+                          ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-800/40'
+                          : rep.status === 'DISMISSED'
+                          ? 'bg-zinc-800 text-zinc-400 border border-white/10'
+                          : 'bg-rose-950/60 text-rose-300 border border-rose-800/40'
+                      }`}
+                    >
+                      {rep.status}
+                    </span>
+                  </div>
+
+                  <div className="p-3 rounded-lg bg-black/40 border border-white/5 text-xs">
+                    <span className="text-2xs font-mono text-zinc-400 uppercase tracking-wider block">Meldegrund:</span>
+                    <p className="text-zinc-200 mt-0.5">{rep.reason}</p>
+                  </div>
+
+                  {rep.reviewNotes && (
+                    <div className="p-2.5 rounded-lg bg-white/[0.02] border border-white/5 text-2xs text-zinc-400">
+                      <span className="font-semibold text-zinc-300">Moderationsnotiz:</span> {rep.reviewNotes}
+                    </div>
+                  )}
+
+                  {rep.status === 'PENDING' && (
+                    <div className="pt-2 border-t border-white/10 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2">
+                      <input
+                        type="text"
+                        placeholder="Moderationsentscheidung / Notiz..."
+                        value={reportNotes[rep.id] || ''}
+                        onChange={(e) => setReportNotes({ ...reportNotes, [rep.id]: e.target.value })}
+                        className="flex-1 px-3 py-1.5 bg-black/40 border border-white/10 rounded-lg text-xs text-white placeholder-zinc-500 focus:outline-none"
+                      />
+                      <div className="flex items-center gap-2 shrink-0">
+                        {rep.postId && (
+                          <button
+                            onClick={() => handleDeleteReportedPost(rep.postId!, rep.id)}
+                            className="px-3 py-1.5 bg-rose-950/80 hover:bg-rose-900 border border-rose-800 text-rose-200 text-xs font-semibold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Löschen &amp; Schließen</span>
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleReviewReport(rep.id, 'DISMISSED')}
+                          className="px-3 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 text-xs font-medium rounded-lg transition-colors cursor-pointer"
+                        >
+                          Abweisen
+                        </button>
+                        <button
+                          onClick={() => handleReviewReport(rep.id, 'RESOLVED')}
+                          className="px-3 py-1.5 bg-white text-black text-xs font-semibold rounded-lg hover:bg-zinc-200 transition-colors cursor-pointer"
+                        >
+                          Als gelöst markieren
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Tab: AUDIT LOGS */}
       {activeTab === 'logs' && (
         <div className="p-6 glass-1 rounded-2xl border border-white/10 overflow-x-auto shadow-xl">
           <table className="w-full text-left text-xs font-mono">

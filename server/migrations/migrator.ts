@@ -114,3 +114,84 @@ export async function runMigrations(): Promise<MigrationResult> {
     };
   }
 }
+
+export interface MigrationStatusResult {
+  connected: boolean;
+  applied: string[];
+  pending: string[];
+  deferred: string[];
+  totalFiles: number;
+  diagnosticCode?: string;
+  error?: string;
+}
+
+/**
+ * Inspects migration state without running changes (safe pre-flight inspection)
+ */
+export async function getMigrationStatus(): Promise<MigrationStatusResult> {
+  const dbHealth = await testDatabaseConnection();
+  if (!dbHealth.connected) {
+    return {
+      connected: false,
+      applied: [],
+      pending: [],
+      deferred: [],
+      totalFiles: 0,
+      diagnosticCode: dbHealth.diagnosticCode,
+      error: `MariaDB is not reachable (${dbHealth.diagnosticCode}).`,
+    };
+  }
+
+  const pool = getDbPool();
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS _nexus_migrations (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        migration_name VARCHAR(150) NOT NULL UNIQUE,
+        executed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB;
+    `);
+
+    const [rows] = await pool.query(`SELECT migration_name FROM _nexus_migrations ORDER BY id ASC;`);
+    const executed = new Set((rows as any[]).map((r) => r.migration_name));
+    const applied = (rows as any[]).map((r) => r.migration_name);
+
+    const files = fs
+      .readdirSync(__dirname)
+      .filter((f) => f.endsWith('.sql'))
+      .sort();
+
+    const pending: string[] = [];
+    const deferred: string[] = [];
+
+    for (const file of files) {
+      if (!executed.has(file)) {
+        if (deferredLegacyMigrations.has(file)) {
+          deferred.push(file);
+        } else {
+          pending.push(file);
+        }
+      }
+    }
+
+    return {
+      connected: true,
+      applied,
+      pending,
+      deferred,
+      totalFiles: files.length,
+      diagnosticCode: dbHealth.diagnosticCode,
+    };
+  } catch (err: any) {
+    return {
+      connected: false,
+      applied: [],
+      pending: [],
+      deferred: [],
+      totalFiles: 0,
+      diagnosticCode: 'DB_CONNECTION_FAILED',
+      error: err.message,
+    };
+  }
+}
+

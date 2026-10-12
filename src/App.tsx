@@ -29,6 +29,7 @@ function PlatformContent() {
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
 
   const {
+    currentUser,
     isLoading,
     isAdmin,
     openAuthModal,
@@ -138,8 +139,9 @@ function PlatformContent() {
 
         {currentView === 'profile' && (
           <ProfilePage
-            username={detailSlug || 'feligor08'}
+            username={detailSlug || currentUser?.username || undefined}
             onNavigateToProject={(slug) => handleNavigate('portfolio', slug)}
+            onNavigateToProduct={(slug) => handleNavigate('store', slug)}
           />
         )}
 

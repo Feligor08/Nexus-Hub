@@ -60,7 +60,9 @@ export interface Project {
   category: 'Software' | 'DevOps' | 'GameServer' | 'AI & Automation' | 'Maker' | 'ITA Curriculum' | string;
   techStack: string[];
   coverImage?: string;
+  coverMediaId?: string;
   galleryImages: string[];
+  galleryMediaIds?: string[];
   githubUrl?: string;
   liveUrl?: string;
   demoUrl?: string;
@@ -70,6 +72,8 @@ export interface Project {
   visibility?: 'PUBLIC' | 'PRIVATE';
   problem?: string;
   solution?: string;
+  goal?: string;
+  result?: string;
   architecture?: string;
   caseStudyProblem?: string;
   caseStudySolution?: string;
@@ -92,6 +96,15 @@ export interface Product {
   currency: string;
   category: 'Software' | 'Developer Tools' | 'Templates' | 'Minecraft Mods' | 'Roblox Assets' | '3D Models & STL' | 'Tutorials' | string;
   images: string[];
+  coverMediaId?: string;
+  galleryMediaIds?: string[];
+  downloadMediaId?: string;
+  tags?: string[];
+  features?: string[];
+  requirements?: string[];
+  changelog?: string;
+  metaTitle?: string;
+  metaDescription?: string;
   digitalProduct: boolean;
   fileFormat: string;
   fileSize: string;
@@ -135,7 +148,7 @@ export interface Order {
   totalAmount: number;
   currency: string;
   status: 'COMPLETED' | 'PENDING' | 'CANCELLED';
-  paymentStatus: 'PAID' | 'PENDING' | 'FAILED' | 'ORDER_CREATED';
+  paymentStatus: 'PAID' | 'PENDING' | 'FAILED' | 'ORDER_CREATED' | 'NOT_REQUIRED';
   downloadToken: string;
   createdAt: string;
 }
@@ -220,6 +233,7 @@ export interface MediaFile {
   ownerId: string;
   filename: string;
   originalName: string;
+  storageKey?: string;
   storagePath: string;
   mimeType: string;
   fileSize: number;
@@ -258,3 +272,20 @@ export interface DownloadToken {
   usedAt?: string;
   createdAt: string;
 }
+
+export interface CommunityReport {
+  id: string;
+  reporterId: string;
+  reporterUsername?: string;
+  postId?: string;
+  postTitle?: string;
+  commentId?: string;
+  reason: string;
+  status: 'PENDING' | 'RESOLVED' | 'DISMISSED';
+  reviewerId?: string;
+  reviewerUsername?: string;
+  reviewNotes?: string;
+  createdAt: string;
+  resolvedAt?: string;
+}
+

@@ -250,6 +250,33 @@ export class UserRepository {
   }
 
   /**
+   * Register user with initial session (used by authService)
+   */
+  async registerUser(
+    userData: {
+      id: string;
+      username: string;
+      email: string;
+      passwordHash: string;
+      displayName: string;
+      avatarUrl?: string;
+      bio?: string;
+    },
+    token: string,
+    ipAddress?: string,
+    userAgent?: string
+  ): Promise<User> {
+    const { user } = await this.registerUserWithSession(userData, {
+      id: `sess-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
+      token,
+      ipAddress,
+      userAgent,
+      daysValid: 30,
+    });
+    return user;
+  }
+
+  /**
    * Atomic Registration Transaction:
    * BEGIN -> Insert User -> Insert Role ('USER') -> Insert Badge -> Insert Session -> COMMIT
    * Rolls back on any error (e.g. duplicate username/email)
@@ -299,7 +326,6 @@ export class UserRepository {
       id: sessionData.id,
       userId: userData.id,
       tokenHash,
-      token: sessionData.token,
       ipAddress: sessionData.ipAddress,
       userAgent: sessionData.userAgent,
       expiresAt,
@@ -547,7 +573,6 @@ export class UserRepository {
       id,
       userId,
       tokenHash,
-      token,
       ipAddress,
       userAgent,
       expiresAt,
@@ -586,7 +611,8 @@ export class UserRepository {
     if (memSession) {
       const user = await this.findById(memSession.userId);
       if (user && user.status === 'ACTIVE') {
-        return { session: memSession, user };
+        const { token: _rawToken, ...safeSession } = memSession;
+        return { session: safeSession, user };
       }
     }
 
@@ -606,7 +632,6 @@ export class UserRepository {
               id: r.id,
               userId: r.user_id,
               tokenHash: r.token_hash,
-              token,
               ipAddress: r.ip_address,
               userAgent: r.user_agent,
               expiresAt: new Date(r.expires_at).toISOString(),
@@ -719,6 +744,31 @@ export class UserRepository {
         console.warn('MariaDB deleteOtherSessions error:', err);
       }
     }
+  }
+
+  async changePassword(userId: string, newPasswordHash: string, currentToken: string): Promise<void> {
+    const currentHash = this.hashToken(currentToken);
+    const dbStatus = getLastDatabaseStatus();
+    if (dbStatus.connected) {
+      await withTransaction(async (conn) => {
+        await conn.execute(
+          `UPDATE users SET password_hash = ?, updated_at = NOW() WHERE id = ?`,
+          [newPasswordHash, userId]
+        );
+        await conn.execute(
+          `DELETE FROM user_sessions WHERE user_id = ? AND token_hash <> ?`,
+          [userId, currentHash]
+        );
+      });
+    }
+
+    const memUser = db.users.find((u) => u.id === userId);
+    if (memUser) {
+      memUser.passwordHash = newPasswordHash;
+    }
+    db.sessions = db.sessions.filter(
+      (s) => s.userId !== userId || s.token === currentToken || s.tokenHash === currentHash
+    );
   }
 }
 

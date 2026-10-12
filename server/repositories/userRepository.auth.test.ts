@@ -80,7 +80,7 @@ describe('MariaDB-backed sessions', () => {
         return [{ affectedRows: 1 }, []];
       }),
     };
-    database.withTransaction.mockImplementation(async (callback: (connection: typeof connection) => Promise<unknown>) => callback(connection));
+    database.withTransaction.mockImplementation(async (callback: (conn: any) => Promise<unknown>) => callback(connection));
 
     await userRepository.changePassword('user-id', 'new-hash', 'current-token');
     expect(statements[0].sql).toContain('UPDATE users SET password_hash');

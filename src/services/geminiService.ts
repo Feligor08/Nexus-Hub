@@ -6,6 +6,16 @@ export interface ChatMessage {
   assistantRole?: string;
 }
 
+async function safeJsonParse<T = any>(res: Response, fallback: T): Promise<T> {
+  const contentType = res.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) return fallback;
+  try {
+    return await res.json();
+  } catch {
+    return fallback;
+  }
+}
+
 export const sendChatMessage = async (
   messages: { role: string; content: string }[],
   role: string
@@ -17,11 +27,11 @@ export const sendChatMessage = async (
   });
 
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
+    const errorData = await safeJsonParse<{ error?: string }>(response, {});
     throw new Error(errorData.error || 'Server error communicating with Gemini');
   }
 
-  const data = await response.json();
+  const data = await safeJsonParse(response, { reply: '' });
   return data.reply;
 };
 
@@ -38,11 +48,11 @@ export const analyzeCodeWithGemini = async (payload: {
   });
 
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
+    const errorData = await safeJsonParse<{ error?: string }>(response, {});
     throw new Error(errorData.error || 'Failed to analyze code');
   }
 
-  const data = await response.json();
+  const data = await safeJsonParse(response, { analysis: '' });
   return data.analysis;
 };
 
@@ -59,11 +69,11 @@ export const generateDocsWithGemini = async (payload: {
   });
 
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
+    const errorData = await safeJsonParse<{ error?: string }>(response, {});
     throw new Error(errorData.error || 'Failed to generate documentation');
   }
 
-  const data = await response.json();
+  const data = await safeJsonParse(response, { documentation: '' });
   return data.documentation;
 };
 
@@ -75,10 +85,10 @@ export const executeQuickAction = async (actionType: string, input: string): Pro
   });
 
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
+    const errorData = await safeJsonParse<{ error?: string }>(response, {});
     throw new Error(errorData.error || 'Quick action failed');
   }
 
-  const data = await response.json();
+  const data = await safeJsonParse(response, { result: '' });
   return data.result;
 };

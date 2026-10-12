@@ -75,6 +75,37 @@ export class OrderRepository {
       };
     }));
   }
+
+  async findAll(): Promise<Order[]> {
+    if (!getLastDatabaseStatus().connected) {
+      return [];
+    }
+    const rows = await executeQuery<any>(
+      `SELECT * FROM orders ORDER BY created_at DESC LIMIT 200`
+    );
+
+    return Promise.all(rows.map(async (row) => {
+      const itemRows = await executeQuery<any>(`SELECT * FROM order_items WHERE order_id = ?`, [row.id]);
+      return {
+        id: row.id,
+        userId: row.user_id,
+        customerEmail: row.customer_email,
+        totalAmount: Number(row.total_amount),
+        currency: row.currency,
+        status: row.status,
+        paymentStatus: row.payment_status,
+        downloadToken: row.download_token,
+        createdAt: row.created_at,
+        items: itemRows.map((item: any): OrderItem => ({
+          productId: item.product_id,
+          name: item.product_name_snapshot,
+          price: Number(item.unit_price),
+          quantity: item.quantity,
+          fileFormat: item.file_format_snapshot,
+        })),
+      };
+    }));
+  }
 }
 
 export const orderRepository = new OrderRepository();

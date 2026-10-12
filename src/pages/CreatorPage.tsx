@@ -5,6 +5,7 @@ import { Project, Product, MediaFile, ContentStatus } from '../types/platform';
 import { ProjectEditorModal } from '../components/cms/ProjectEditorModal';
 import { ProductEditorModal } from '../components/cms/ProductEditorModal';
 import { MediaManagerModal } from '../components/cms/MediaManagerModal';
+import { CreatorApplicationView } from '../components/CreatorApplicationView';
 import {
   Layers,
   ShoppingBag,
@@ -172,13 +173,7 @@ export const CreatorPage: React.FC<CreatorPageProps> = ({ onNavigate }) => {
   }
 
   if (!isCreator && !isAdmin) {
-    return (
-      <div className="max-w-2xl mx-auto py-24 px-4 text-center space-y-4">
-        <AlertCircle className="w-10 h-10 mx-auto text-zinc-400" />
-        <h1 className="text-xl font-bold text-white">Creator-Zugriff erforderlich</h1>
-        <p className="text-xs text-zinc-400">Dein Konto darf keine Projekte oder Produkte verwalten.</p>
-      </div>
-    );
+    return <CreatorApplicationView />;
   }
 
   return (

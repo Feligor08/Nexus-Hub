@@ -22,6 +22,7 @@ export interface AuthResult {
   user?: User;
   token?: string;
   error?: string;
+  errorCode?: string;
 }
 
 export class AuthService {
@@ -92,6 +93,7 @@ export class AuthService {
       return {
         success: false,
         authenticated: false,
+        errorCode: 'CONFLICT',
         error: 'Dieser Benutzername ist bereits vergeben.',
       };
     }
@@ -101,6 +103,7 @@ export class AuthService {
       return {
         success: false,
         authenticated: false,
+        errorCode: 'CONFLICT',
         error: 'Ein Konto mit dieser E-Mail-Adresse existiert bereits.',
       };
     }
@@ -109,11 +112,10 @@ export class AuthService {
     const passwordHash = await userRepository.hashPassword(password);
     const userId = `usr-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
     const token = this.generateSessionToken();
-    const sessionId = `sess-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
 
     try {
       // 4. Atomic Registration Transaction (User + USER role + Session)
-      const { user } = await userRepository.registerUserWithSession(
+      const registeredUser = await userRepository.registerUser(
         {
           id: userId,
           username,
@@ -121,14 +123,11 @@ export class AuthService {
           passwordHash,
           displayName,
         },
-        {
-          id: sessionId,
-          token,
-          ipAddress: clientIp,
-          userAgent,
-          daysValid: 30,
-        }
+        token,
+        clientIp,
+        userAgent
       );
+      const user = (registeredUser as any)?.user || registeredUser;
 
       return {
         success: true,
@@ -153,16 +152,16 @@ export class AuthService {
     const identifier = (dto.emailOrUsername || dto.email || dto.username || '').trim();
     const password = dto.password || '';
 
+    // Generic error message for security (prevents user enumeration)
+    const genericAuthError = 'Ungültige Anmeldedaten.';
+
     if (!identifier || !password) {
       return {
         success: false,
         authenticated: false,
-        error: 'Bitte E-Mail/Benutzername und Passwort eingeben.',
+        error: genericAuthError,
       };
     }
-
-    // Generic error message for security (Section 10 - prevents user enumeration)
-    const genericAuthError = 'E-Mail/Benutzername oder Passwort ist falsch.';
 
     const userWithCreds = await userRepository.findWithCredentials(identifier);
     if (!userWithCreds) {
@@ -177,7 +176,7 @@ export class AuthService {
       return {
         success: false,
         authenticated: false,
-        error: 'Dieses Konto wurde vorübergehend gesperrt. Bitte wende dich an den Support.',
+        error: genericAuthError,
       };
     }
 

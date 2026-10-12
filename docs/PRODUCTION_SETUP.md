@@ -1,64 +1,190 @@
-# NEXUS CODE PLAY — PRODUCTION SETUP & DEPLOYMENT GUIDE
+# NEXUS CODE PLAY — PRODUCTION SETUP, DEPLOYMENT & OPERATION GUIDE (SPRINT 9)
 
-## 1. Architekturübersicht
-- **Hardware Host:** HP EliteDesk 800 G3 Mini (Intel Core i5, 16 GB RAM, NVMe SSD)
-- **Betriebssystem:** Ubuntu Server 24.04 LTS (CasaOS Dashboard)
-- **Netzwerk & VPN:** Tailscale WireGuard Mesh-VPN (keine offenen Router-Ports)
-- **Datenbank:** MariaDB 11.x (Containerized / Local Service auf Port 3306)
-- **Reverse Proxy:** Nginx Proxy Manager mit automatisierter Let's Encrypt TLS-Terminierung
-- **Backend:** Node.js Express mit REST API (`/api` und `/api/v1`)
-- **Frontend:** React 19 SPA mit Tailwind CSS v4 und Liquid Glass Design
+## 1. Zielarchitektur & Infrastruktur
 
-## 2. Umgebungskonfiguration (.env)
-Erstelle eine sichere `.env`-Datei auf dem Server:
+- **Produktionsdomäne:** `https://www.fs-nexus-systems.de`
+- **Host-System:** HP EliteDesk 800 G3 Mini (Ubuntu Server 24.04 LTS, CasaOS / Docker)
+- **Netzwerk:** Tailscale WireGuard Mesh-VPN (kein öffentliches Routing von Datenbank-Ports!)
+- **Reverse Proxy:** Nginx Proxy Manager (Let's Encrypt TLS-Zertifikate, HTTPS-Zwang, HTTP/2)
+- **Anwendungs-Laufzeit:** Node.js 22 LTS / tsx Full-Stack Express Server (Port 3000)
+- **Datenbank:** MariaDB 11.x (dedizierter unprivilegierter DB-Nutzer, nicht root)
+- **Dateispeicher:** Privates Verzeichnis außerhalb des Web-Roots (`MEDIA_STORAGE_PATH`)
 
-```env
-NODE_ENV=production
-PORT=3000
+---
 
-# MariaDB Konfiguration (Nur serverseitig!)
-DB_HOST=127.0.0.1
-DB_PORT=3306
-DB_NAME=nexus_code_play
-DB_USER=nexus_app
-DB_PASSWORD=DeinSicheresMariaDBPasswort
+## 2. Benötigte Environment-Variablen (Namen ohne Werte)
 
-# Session & Sicherheit
-SESSION_SECRET=EinZufalligerLangerSchluesselFuerSignierung
+Folgende Variablen müssen in der Produktionsumgebung (`.env` auf dem Server oder Docker-Environment) definiert werden:
 
-# Google Gemini API
-GEMINI_API_KEY=DeinGeminiApiKey
-```
+| Variablenname | Beschreibung |
+|---|---|
+| `NODE_ENV` | `production` |
+| `PORT` | Port für Express-Server (Standard: `3000`) |
+| `APP_URL` | Öffentliche Basis-URL: `https://www.fs-nexus-systems.de` |
+| `SESSION_SECRET` | Kryptografisch zufälliger String zur Sitzungssignierung |
+| `JWT_SECRET` | Optionaler zusätzlicher Signaturschlüssel |
+| `DB_HOST` | Host oder Tailscale-IP des MariaDB-Servers (z.B. `100.x.x.x` oder `127.0.0.1`) |
+| `DB_PORT` | MariaDB-Port (Standard: `3306`) |
+| `DB_NAME` | Datenbankname (z.B. `nexus_code_play`) |
+| `DB_USER` | Dedizierter unprivilegierter Datenbankbenutzer (z.B. `nexus_app`) |
+| `DB_PASSWORD` | Sicheres Datenbankpasswort |
+| `DB_POOL_MIN` | Minimale Pool-Verbindungen (Standard: `2`) |
+| `DB_POOL_MAX` | Maximale Pool-Verbindungen (Standard: `10`) |
+| `DB_CONNECT_TIMEOUT` | Verbindungstimeout in Millisekunden (Standard: `5000`) |
+| `MEDIA_STORAGE_PATH` | Absoluter oder relativer privater Pfad für Mediendateien (z.B. `/var/nexus/storage`) |
+| `GEMINI_API_KEY` | Serverseitiger Google Gemini API-Schlüssel für KI-Funktionen |
+| `AUTO_MIGRATE` | Optional (`false` in Produktion; Migrationen via CLI empfohlen) |
 
-## 3. MariaDB Initialisierung & Migrationen
-Das System führt beim Serverstart automatisch alle ausstehenden SQL-Dateien aus `/server/migrations/` aus:
-- `001_initial_schema.sql`: Grundtabellen für Benutzer, Rollen, Projekte, Produkte, Warenkörbe, Bestellungen
-- `002_seed_initial_data.sql`: System-Rollen und Basiskategorien
-- `003_auth_sessions.sql`: Sitzungs- und Audit-Log-Tabellen
-- `004_remove_demo_data.sql`: Selektive Bereinigung der ursprünglichen Seed-Testdaten
-- `005_content_management.sql`: Status-Lifecycle (`DRAFT`, `PUBLISHED`, `ARCHIVED`), Medien und Entitlements
+*Sicherheitshinweis:* Die `.env`-Datei darf niemals in Git eingecheckt werden (`.gitignore` erzwingt dies). Verwende ausschließlich `.env.example` als Vorlage.
 
-## 4. Admin Bootstrap
-Nach dem ersten Start das primäre Administratorkonto initialisieren:
+---
 
-```bash
-npm run admin:bootstrap
-```
+## 3. Datenbankverbindung & Netzwerkanforderungen
 
-## 5. Build & Ausführung
+1. **Keine öffentlichen Ports:** Der Port `3306` darf unter keinen Umständen über die öffentliche Firewall freigegeben werden.
+2. **Tailscale / Privates Netz:** Der Zugriff zwischen Anwendungs-Server und separatem MariaDB-Host erfolgt über das interne Tailscale-Interface (IP `100.x.x.x`) oder über ein lokales Docker-Netzwerk (`bridge`/`overlay`).
+3. **Unprivilegierter Nutzer:**
+   ```sql
+   CREATE DATABASE IF NOT EXISTS nexus_code_play CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+   CREATE USER IF NOT EXISTS 'nexus_app'@'%' IDENTIFIED BY '<SicheresPasswort>';
+   GRANT SELECT, INSERT, UPDATE, DELETE ON nexus_code_play.* TO 'nexus_app'@'%';
+   FLUSH PRIVILEGES;
+   ```
+4. **Verbindungspooling:** Der Verbindungsaufbau nutzt ein Keepalive-fähiges Pool-Management (`mysql2/promise`) mit automatischer Reconnect-Behandlung und 2000ms TCP-Timeout-Drosselung bei Netzausfall.
+
+---
+
+## 4. Dateispeicher (Media Storage) & Berechtigungen
+
+- Mediendateien und Downloads werden unter dem in `MEDIA_STORAGE_PATH` definierten Pfad abgelegt.
+- Dieser Ordner liegt **außerhalb** des statischen Web-Roots (`dist/`).
+- Dateien werden ausschließlich unter UUID-basierten Schlüsseln gespeichert (Path-Traversal-Schutz).
+- Auslieferung geschieht nur über den autorisierten Endpunkt `/api/media/:id/file` bzw. `/api/downloads/file/:token`.
+- Erforderliche Dateisystem-Berechtigungen auf dem Server:
+  ```bash
+  mkdir -p /var/nexus/storage
+  chown -R node:node /var/nexus/storage
+  chmod 750 /var/nexus/storage
+  ```
+
+---
+
+## 5. Build, Migration & Start
+
 ```bash
 # 1. Abhängigkeiten installieren
-npm install
+npm ci
 
-# 2. Frontend bauen (Vite)
+# 2. Produktions-Build erstellen (Vite Frontend SPA)
 npm run build
 
-# 3. Server starten (Full-Stack Express auf Port 3000)
+# 3. MariaDB-Verbindung und Schema verifizieren
+npm run db:check
+
+# 4. Datenbank-Migrationen kontrolliert ausführen
+npm run db:migrate
+
+# 5. Ersten Administrator einrichten (falls noch nicht vorhanden)
+npm run admin:bootstrap
+
+# 6. Produktions-Server starten
 npm run start
 ```
 
-## 6. Sicherheit & Zugriffsregeln
-- **Preis-Sicherheit:** Alle Produktpreise und Gesamtbeträge werden serverseitig in `cartRepository` und `apiRoutes` validiert. Der Client kann Preise nicht manipulieren.
-- **Transaktionssicherheit:** Bestellungen und Snapshots werden in MariaDB-Transaktionen (`withTransaction`) gespeichert.
-- **Download-Tokens:** Produktdateien liegen niemals ungeschützt im statischen Web-Root. Downloads erfordern einen serverseitig verifizierten, zeitlich begrenzten Token (`/api/downloads/file/:token`).
-- **RBAC:** Administratoren haben Zugriff auf `/admin`, Creator auf `/creator`, Benutzer auf ihr `/dashboard` und ihre Einkäufe.
+Für den Dauerbetrieb wird PM2 mit der vorhandenen Konfigurationsdatei empfohlen:
+```bash
+# Start mit PM2 Ecosystem
+pm2 start ecosystem.config.cjs --env production
+
+# Status prüfen & Autostart bei Serverneustart einrichten
+pm2 status
+pm2 save
+pm2 startup
+```
+
+Alternativ über Systemd (`/etc/systemd/system/nexus-code-play.service`):
+```ini
+[Unit]
+Description=Nexus Code Play Full-Stack Platform
+After=network.target mariadb.service
+
+[Service]
+Type=simple
+User=nexus
+WorkingDirectory=/var/nexus/app
+ExecStart=/usr/bin/npm run start
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+Environment=PORT=3000
+
+[Install]
+WantedBy=multi-user.target
+```
+
+---
+
+## 6. HTTPS & Reverse Proxy (Nginx Proxy Manager)
+
+In Nginx Proxy Manager konfigurieren:
+- **Domain Names:** `www.fs-nexus-systems.de`, `fs-nexus-systems.de`
+- **Forward Hostname / IP:** `127.0.0.1` (oder Tailscale-IP des App-Servers)
+- **Forward Port:** `3000`
+- **SSL:**
+  - Let's Encrypt Certificate
+  - Force SSL: Aktiviert
+  - HTTP/2 Support: Aktiviert
+  - HSTS: Aktiviert
+- **Websockets Support:** Aktiviert (für HMR in Dev / Streaming-API)
+
+---
+
+## 7. Health Checks & Überwachung
+
+Das System stellt strukturierte, nicht-blockierende Health-Endpunkte bereit:
+
+- `GET /api/health`: Liefert den Systemzustand von API, MariaDB, Speicher und KI.
+- `GET /api/health/database`: Liefert den detaillierten Verbindungs- und Latenzstatus von MariaDB.
+- `GET /api/admin/system-health`: Erweiterte Infrastrukturprüfung (nur für Administratoren).
+
+*Wichtig:* Health-Endpunkte geben niemals Passwörter, Hashes, Session-Tokens oder interne Server-Pfade aus. Bei Ausfall der Datenbank antwortet der Endpunkt mit Status 200 und Feld `database: "DISCONNECTED"`, ohne den Server-Thread zu blockieren.
+
+---
+
+## 8. Backup & Wiederherstellung
+
+Für detaillierte Anweisungen siehe das vollständige Handbuch: **`docs/BACKUP_AND_RESTORE.md`**.
+
+### Automatisiertes Backup ausführen:
+```bash
+bash server/scripts/backup.sh
+```
+
+### Backup-Integrität prüfen:
+```bash
+npm run backup verify /var/nexus/backups/database/nexus_db_YYYYMMDD_HHMMSS.sql.gz
+```
+
+### Wiederherstellung (Restore):
+```bash
+bash server/scripts/restore.sh /var/nexus/backups/database/nexus_db_YYYYMMDD_HHMMSS.sql.gz
+```
+
+---
+
+## 9. Update & Rollback-Verfahren
+
+### Update-Ablauf:
+1. Backup der Datenbank und des Media Storage anlegen (siehe Punkt 8).
+2. Neuesten Code auschecken: `git pull origin main`.
+3. Abhängigkeiten aktualisieren: `npm ci`.
+4. Frontend neu bauen: `npm run build`.
+5. Migrationen anwenden: `npm run db:migrate`.
+6. Anwendung neu starten: `pm2 restart nexus-platform`.
+7. Health-Check prüfen: `curl -s https://www.fs-nexus-systems.de/api/health`.
+
+### Rollback-Ablauf:
+1. Vorherigen Git-Commit auschecken: `git checkout <PREVIOUS_COMMIT>`.
+2. Frontend neu bauen: `npm run build`.
+3. Falls Migrationsänderungen inkompatibel sind, Backup-Dump wieder einspielen.
+4. Anwendung neu starten: `pm2 restart nexus-platform`.

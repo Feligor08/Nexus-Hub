@@ -80,7 +80,9 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             </div>
 
             <div>
-              <h3 className="text-lg font-bold text-white">Bestellung erfolgreich abgeschlossen!</h3>
+              <h3 className="text-lg font-bold text-white">
+                {completedOrder.downloadToken ? 'Bestellung erfolgreich abgeschlossen!' : 'Bestellung erfolgreich aufgenommen!'}
+              </h3>
               <p className="text-xs text-zinc-400 mt-1">
                 Bestellnummer: <span className="font-mono text-zinc-200">{completedOrder.id}</span>
               </p>
@@ -88,7 +90,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
             <div className="p-4 liquid-glass rounded-lg text-left space-y-2 border border-white/10">
               <span className="text-2xs font-semibold text-zinc-400 uppercase tracking-wider block">
-                Deine digitalen Downloads:
+                {completedOrder.downloadToken ? 'Deine digitalen Downloads:' : 'Bestellstatus & Berechtigungen:'}
               </span>
               {downloadNotice && (
                 <div className="p-2.5 bg-emerald-950/40 border border-emerald-800/40 rounded-lg text-xs text-emerald-300 flex items-center gap-2">
@@ -96,18 +98,27 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                   <span>{downloadNotice}</span>
                 </div>
               )}
-              {completedOrder.items.map((it, idx) => (
-                <div key={idx} className="flex items-center justify-between text-xs py-1.5 border-b border-white/5 last:border-0">
-                  <span className="text-zinc-200 font-medium">{it.name}</span>
-                  <button
-                    onClick={() => handleDownload(it.name, completedOrder.downloadToken)}
-                    className="flex items-center gap-1.5 px-3 py-1 bg-white hover:bg-zinc-200 text-black font-semibold text-2xs rounded-lg transition-colors cursor-pointer"
-                  >
-                    <Download className="w-3 h-3" />
-                    <span>Herunterladen</span>
-                  </button>
+              {completedOrder.downloadToken ? (
+                completedOrder.items.map((it, idx) => (
+                  <div key={idx} className="flex items-center justify-between text-xs py-1.5 border-b border-white/5 last:border-0">
+                    <span className="text-zinc-200 font-medium">{it.name}</span>
+                    <button
+                      onClick={() => handleDownload(it.name, completedOrder.downloadToken)}
+                      className="flex items-center gap-1.5 px-3 py-1 bg-white hover:bg-zinc-200 text-black font-semibold text-2xs rounded-lg transition-colors cursor-pointer"
+                    >
+                      <Download className="w-3 h-3" />
+                      <span>Herunterladen</span>
+                    </button>
+                  </div>
+                ))
+              ) : (
+                <div className="py-2 text-xs text-zinc-300 space-y-1">
+                  <p className="text-amber-300 font-semibold">Status: Zahlungseingang ausstehend</p>
+                  <p className="text-2xs text-zinc-400">
+                    Die digitalen Download-Lizenzen werden automatisch freigeschaltet, sobald die Zahlung über den Zahlungsdienstleister bestätigt wurde.
+                  </p>
                 </div>
-              ))}
+              )}
             </div>
 
             <div className="pt-2 flex justify-center">

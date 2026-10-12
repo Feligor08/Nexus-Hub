@@ -56,30 +56,42 @@ function classifyMysqlError(error: unknown): DatabaseDiagnosticCode {
   return classifyNetworkError({ code } as NodeJS.ErrnoException);
 }
 
+let inFlightProbe: Promise<DatabaseDiagnosticCode> | null = null;
+
 async function probeTcpConnection(): Promise<DatabaseDiagnosticCode> {
   const host = config.db.host;
   if (!host || host === 'DB_HOST_NOT_CONFIGURED') return 'DB_HOST_NOT_CONFIGURED';
-  try {
-    await lookup(host);
-  } catch (error) {
-    return classifyNetworkError(error as NodeJS.ErrnoException);
-  }
+  if (inFlightProbe) return inFlightProbe;
 
-  return new Promise((resolve) => {
-    let settled = false;
-    let timeout: NodeJS.Timeout;
-    const socket = createConnection({ host, port: config.db.port });
-    const finish = (code: DatabaseDiagnosticCode) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      socket.destroy();
-      resolve(code);
-    };
-    timeout = setTimeout(() => finish('DB_PORT_UNREACHABLE'), config.db.connectTimeout);
-    socket.once('connect', () => finish('DB_CONNECTED'));
-    socket.once('error', (error: NodeJS.ErrnoException) => finish(classifyNetworkError(error)));
-  });
+  inFlightProbe = (async () => {
+    try {
+      try {
+        await lookup(host);
+      } catch (error) {
+        return classifyNetworkError(error as NodeJS.ErrnoException);
+      }
+
+      return await new Promise<DatabaseDiagnosticCode>((resolve) => {
+        let settled = false;
+        let timeout: NodeJS.Timeout;
+        const socket = createConnection({ host, port: config.db.port });
+        const finish = (code: DatabaseDiagnosticCode) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          socket.destroy();
+          resolve(code);
+        };
+        timeout = setTimeout(() => finish('DB_PORT_UNREACHABLE'), Math.min(config.db.connectTimeout, 2000));
+        socket.once('connect', () => finish('DB_CONNECTED'));
+        socket.once('error', (error: NodeJS.ErrnoException) => finish(classifyNetworkError(error)));
+      });
+    } finally {
+      inFlightProbe = null;
+    }
+  })();
+
+  return inFlightProbe;
 }
 
 /**
@@ -105,69 +117,90 @@ export function getDbPool(): Pool {
   return pool;
 }
 
+let inFlightTest: Promise<DatabaseStatus> | null = null;
+
 /**
- * Tests connection to MariaDB and measures round-trip latency
+ * Tests connection to MariaDB and measures round-trip latency.
+ * Employs in-flight deduplication and a 10s caching window to guarantee the HTTP server never hangs on probes.
  */
-export async function testDatabaseConnection(): Promise<DatabaseStatus> {
-  const start = Date.now();
-  const network = await probeTcpConnection();
-  if (network !== 'DB_CONNECTED') {
-    lastKnownStatus = {
-      connected: false,
-      status: 'degraded',
-      diagnosticCode: network,
-      type: 'MariaDB',
-      host: config.db.host,
-      database: config.db.database,
-      checkedAt: new Date().toISOString(),
-    };
+export async function testDatabaseConnection(force = false): Promise<DatabaseStatus> {
+  const now = Date.now();
+  if (
+    !force &&
+    lastKnownStatus.diagnosticCode !== 'DB_NOT_CHECKED' &&
+    now - new Date(lastKnownStatus.checkedAt).getTime() < 10000
+  ) {
     return lastKnownStatus;
   }
 
-  try {
-    // Test with a direct connection with strict timeout so we never hang indefinitely on unreachable hosts
-    const connPromise = mysql.createConnection({
-      host: config.db.host,
-      port: config.db.port,
-      user: config.db.user,
-      password: config.db.password,
-      database: config.db.database,
-      connectTimeout: 2000,
-    });
+  if (inFlightTest) return inFlightTest;
 
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Connection timed out')), 2500)
-    );
+  inFlightTest = (async () => {
+    try {
+      const start = Date.now();
+      const network = await probeTcpConnection();
+      if (network !== 'DB_CONNECTED') {
+        lastKnownStatus = {
+          connected: false,
+          status: 'degraded',
+          diagnosticCode: network,
+          type: 'MariaDB',
+          host: config.db.host,
+          database: config.db.database,
+          checkedAt: new Date().toISOString(),
+        };
+        return lastKnownStatus;
+      }
 
-    const conn = await Promise.race([connPromise, timeoutPromise]);
-    const [rows] = await conn.query('SELECT 1 as is_alive, VERSION() as version');
-    const latency = Date.now() - start;
-    const versionStr = Array.isArray(rows) && (rows[0] as any)?.version ? (rows[0] as any).version : 'MariaDB';
-    await conn.end();
+      try {
+        const connPromise = mysql.createConnection({
+          host: config.db.host,
+          port: config.db.port,
+          user: config.db.user,
+          password: config.db.password,
+          database: config.db.database,
+          connectTimeout: 2000,
+        });
 
-    lastKnownStatus = {
-      connected: true,
-      status: 'connected',
-      diagnosticCode: 'DB_CONNECTED',
-      type: versionStr.toLowerCase().includes('maria') ? 'MariaDB' : 'MySQL/MariaDB',
-      host: config.db.host,
-      database: config.db.database,
-      latencyMs: latency,
-      checkedAt: new Date().toISOString(),
-    };
-    return lastKnownStatus;
-  } catch (err: unknown) {
-    lastKnownStatus = {
-      connected: false,
-      status: 'degraded',
-      diagnosticCode: classifyMysqlError(err),
-      type: 'MariaDB',
-      host: config.db.host,
-      database: config.db.database,
-      checkedAt: new Date().toISOString(),
-    };
-    return lastKnownStatus;
-  }
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Connection timed out')), 2500)
+        );
+
+        const conn = await Promise.race([connPromise, timeoutPromise]);
+        const [rows] = await conn.query('SELECT 1 as is_alive, VERSION() as version');
+        const latency = Date.now() - start;
+        const versionStr = Array.isArray(rows) && (rows[0] as any)?.version ? (rows[0] as any).version : 'MariaDB';
+        await conn.end();
+
+        lastKnownStatus = {
+          connected: true,
+          status: 'connected',
+          diagnosticCode: 'DB_CONNECTED',
+          type: versionStr.toLowerCase().includes('maria') ? 'MariaDB' : 'MySQL/MariaDB',
+          host: config.db.host,
+          database: config.db.database,
+          latencyMs: latency,
+          checkedAt: new Date().toISOString(),
+        };
+        return lastKnownStatus;
+      } catch (err: unknown) {
+        lastKnownStatus = {
+          connected: false,
+          status: 'degraded',
+          diagnosticCode: classifyMysqlError(err),
+          type: 'MariaDB',
+          host: config.db.host,
+          database: config.db.database,
+          checkedAt: new Date().toISOString(),
+        };
+        return lastKnownStatus;
+      }
+    } finally {
+      inFlightTest = null;
+    }
+  })();
+
+  return inFlightTest;
 }
 
 /**
@@ -209,3 +242,79 @@ export async function withTransaction<T>(callback: (connection: PoolConnection) 
 export function getLastDatabaseStatus(): DatabaseStatus {
   return lastKnownStatus;
 }
+
+/**
+ * Safely drains and closes the MariaDB connection pool on graceful shutdown
+ */
+export async function closeDbPool(): Promise<void> {
+  if (pool) {
+    const currentPool = pool;
+    pool = null;
+    try {
+      await currentPool.end();
+    } catch (err) {
+      console.warn('Error while ending MariaDB connection pool:', err);
+    }
+  }
+}
+
+/**
+ * Validates database connectivity and verifies that required tables exist in MariaDB.
+ * Exposes NO passwords or credentials.
+ */
+export async function verifyDatabaseSchema(): Promise<{
+  connected: boolean;
+  latencyMs?: number;
+  tablesFound: string[];
+  missingTables: string[];
+  diagnosticCode: DatabaseDiagnosticCode;
+}> {
+  const dbStatus = await testDatabaseConnection();
+  if (!dbStatus.connected) {
+    return {
+      connected: false,
+      tablesFound: [],
+      missingTables: ['users', 'projects', 'products', 'orders', 'media_files'],
+      diagnosticCode: dbStatus.diagnosticCode,
+    };
+  }
+
+  try {
+    const requiredTables = [
+      'users',
+      'user_roles',
+      'user_sessions',
+      'projects',
+      'products',
+      'orders',
+      'media_files',
+      'download_entitlements',
+      '_nexus_migrations',
+    ];
+    const rows = await executeQuery<{ table_name?: string; TABLE_NAME?: string }>(
+      `SELECT table_name FROM information_schema.tables WHERE table_schema = ?`,
+      [config.db.database]
+    );
+    const existing = new Set(
+      rows.map((r) => String(r.table_name || r.TABLE_NAME || '').toLowerCase())
+    );
+    const tablesFound = requiredTables.filter((t) => existing.has(t.toLowerCase()));
+    const missingTables = requiredTables.filter((t) => !existing.has(t.toLowerCase()));
+
+    return {
+      connected: true,
+      latencyMs: dbStatus.latencyMs,
+      tablesFound,
+      missingTables,
+      diagnosticCode: dbStatus.diagnosticCode,
+    };
+  } catch (err) {
+    return {
+      connected: false,
+      tablesFound: [],
+      missingTables: ['users', 'projects', 'products', 'orders', 'media_files'],
+      diagnosticCode: 'DB_PERMISSION_DENIED',
+    };
+  }
+}
+

@@ -76,7 +76,7 @@ export class ProductRepository {
     product: Product,
     allowForeignOwner: boolean
   ): Promise<void> {
-    const imageIds = [...new Set([product.coverMediaId, ...product.galleryMediaIds].filter((id): id is string => Boolean(id)))];
+    const imageIds = [...new Set([product.coverMediaId, ...(product.galleryMediaIds || [])].filter((id): id is string => Boolean(id)))];
     const downloadIds = product.downloadMediaId ? [product.downloadMediaId] : [];
 
     for (const mediaId of [...imageIds, ...downloadIds]) {
@@ -213,7 +213,7 @@ export class ProductRepository {
       updatedAt: now,
     };
 
-    newProd.images = [newProd.coverMediaId, ...newProd.galleryMediaIds]
+    newProd.images = [newProd.coverMediaId, ...(newProd.galleryMediaIds || [])]
       .filter((mediaId): mediaId is string => Boolean(mediaId))
       .map((mediaId) => `/api/media/${encodeURIComponent(mediaId)}/file`);
 
@@ -236,7 +236,7 @@ export class ProductRepository {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
         insertValues
       );
-      for (const [sortOrder, mediaId] of newProd.galleryMediaIds.entries()) {
+      for (const [sortOrder, mediaId] of (newProd.galleryMediaIds || []).entries()) {
         await connection.execute(
           `INSERT INTO product_media (product_id, media_id, sort_order) VALUES (?, ?, ?)`,
           [newProd.id, mediaId, sortOrder]
@@ -269,7 +269,7 @@ export class ProductRepository {
     };
             const updatedStatus = updated.status || 'DRAFT';
 
-    updated.images = [updated.coverMediaId, ...updated.galleryMediaIds]
+    updated.images = [updated.coverMediaId, ...(updated.galleryMediaIds || [])]
       .filter((mediaId): mediaId is string => Boolean(mediaId))
       .map((mediaId) => `/api/media/${encodeURIComponent(mediaId)}/file`);
 
@@ -304,7 +304,7 @@ export class ProductRepository {
 
       if (data.galleryMediaIds !== undefined) {
         await connection.execute(`DELETE FROM product_media WHERE product_id = ?`, [id]);
-        for (const [sortOrder, mediaId] of updated.galleryMediaIds.entries()) {
+        for (const [sortOrder, mediaId] of (updated.galleryMediaIds || []).entries()) {
           await connection.execute(
             `INSERT INTO product_media (product_id, media_id, sort_order) VALUES (?, ?, ?)`,
             [id, mediaId, sortOrder]

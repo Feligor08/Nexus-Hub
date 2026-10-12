@@ -6,11 +6,12 @@
   "scripts": {
     "dev": "tsx server.ts",
     "admin:bootstrap": "tsx server/scripts/adminBootstrap.ts",
+    "db:migrate": "tsx server/scripts/runMigrationsCli.ts",
+    "db:check": "tsx server/scripts/testDatabaseConnectionCli.ts",
+    "backup": "tsx server/scripts/runBackupCli.ts",
     "build": "vite build",
     "test": "vitest run",
-    "test": "vitest run",
     "start": "tsx server.ts",
-    "admin:bootstrap": "tsx server/scripts/adminBootstrap.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"

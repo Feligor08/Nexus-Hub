@@ -187,19 +187,19 @@ export const StorePage: React.FC<StorePageProps> = ({
                   ))}
                 </div>
               )}
-              {activeProduct.tags?.length ? <div className="flex flex-wrap gap-2">{activeProduct.tags.map((tag) => <span key={tag} className="px-2 py-1 bg-white/5 border border-white/10 rounded text-2xs text-zinc-300">{tag}</span>)}</div> : null}
+              {(activeProduct.tags?.length ?? 0) > 0 ? <div className="flex flex-wrap gap-2">{activeProduct.tags?.map((tag: string) => <span key={tag} className="px-2 py-1 bg-white/5 border border-white/10 rounded text-2xs text-zinc-300">{tag}</span>)}</div> : null}
             </div>
 
             {!!activeProduct.features?.length && (
               <div className="p-6 liquid-glass rounded-xl border border-white/10 space-y-2">
                 <h2 className="text-sm font-bold text-white">Features</h2>
-                <ul className="list-disc pl-5 text-xs text-zinc-300 space-y-1">{activeProduct.features.map((feature) => <li key={feature}>{feature}</li>)}</ul>
+                <ul className="list-disc pl-5 text-xs text-zinc-300 space-y-1">{activeProduct.features.map((feature: string) => <li key={feature}>{feature}</li>)}</ul>
               </div>
             )}
             {!!activeProduct.requirements?.length && (
               <div className="p-6 liquid-glass rounded-xl border border-white/10 space-y-2">
                 <h2 className="text-sm font-bold text-white">Voraussetzungen</h2>
-                <ul className="list-disc pl-5 text-xs text-zinc-300 space-y-1">{activeProduct.requirements.map((requirement) => <li key={requirement}>{requirement}</li>)}</ul>
+                <ul className="list-disc pl-5 text-xs text-zinc-300 space-y-1">{activeProduct.requirements.map((requirement: string) => <li key={requirement}>{requirement}</li>)}</ul>
               </div>
             )}
             {activeProduct.changelog && (
